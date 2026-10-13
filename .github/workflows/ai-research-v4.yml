@@ -1,0 +1,33 @@
+name: Historical Market AI Research V4 (Paper Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies
+        run: python -m pip install --disable-pip-version-check numpy pandas scikit-learn requests
+      - name: Run V4 safety tests
+        run: python -m unittest discover -s ai-research/v4 -p 'test_*.py' -v
+      - name: Run V4 historical research
+        run: python ai-research/v4/research_v4.py --days 90 --out-dir reports/v4
+      - name: Upload paper research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v4-report
+          path: reports/v4/
+          if-no-files-found: warn
+  
