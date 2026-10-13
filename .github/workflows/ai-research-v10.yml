@@ -1,0 +1,20 @@
+name: AI Research V10 Integration Self Test (Paper Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Run V10 synthetic integration self-test
+        run: python ai-research/v10/diagnostic_v10.py
