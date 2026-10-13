@@ -60,4 +60,16 @@ def test_simulator():
 
     assert len(accepted) == 3
     assert [t["pair"] for t in accepted] == [
-        "
+        "BTC", "ETH", "BTC"
+    ]
+
+    assert TRADING_ENABLED is False
+    assert HOLDOUT_EVALUATED is False
+
+    print("V7 SYNTHETIC SELF-TEST PASSED")
+    print("Trading enabled: False")
+    print("Holdout evaluated: False")
+
+
+if __name__ == "__main__":
+    test_simulator()
