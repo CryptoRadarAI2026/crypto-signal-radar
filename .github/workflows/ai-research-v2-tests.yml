@@ -1,0 +1,38 @@
+name: Crypto Radar AI V2 - Offline Safety Tests
+
+on:
+  push:
+    branches:
+      - ai-research-v2-risk-aware
+    paths:
+      - 'ai-research/v2/**'
+      - '.github/workflows/ai-research-v2-tests.yml'
+  pull_request:
+    paths:
+      - 'ai-research/v2/**'
+      - '.github/workflows/ai-research-v2-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ai-research
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ai-research/requirements.txt
+      - name: Install research libraries
+        run: python -m pip install -r requirements.txt
+      - name: Legacy safety tests
+        run: python -m unittest discover -s tests -v
+      - name: V2 offline correctness and leakage tests
+        run: python -m unittest discover -s v2/tests -v
