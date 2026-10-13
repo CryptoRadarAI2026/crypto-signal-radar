@@ -44,3 +44,12 @@ jobs:
       - name: Historical research validation only
         run: |
           python ai-research/v11/research_v11.py
+
+      - name: Upload V11 research reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v11-validation-reports
+          path: reports/v11/
+          if-no-files-found: warn
+          retention-days: 30
