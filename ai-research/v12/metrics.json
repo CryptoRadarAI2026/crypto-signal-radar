@@ -1,0 +1,218 @@
+{
+  "schema": "crypto-radar-ai-research-v11",
+  "research_only": true,
+  "trading_enabled": false,
+  "model_exported": false,
+  "status": "VALIDATION_ONLY_NOT_APPROVED",
+  "data_source": "Coinbase Exchange public 1m historical OHLCV",
+  "markets": [
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD"
+  ],
+  "features": [
+    "return_1m",
+    "return_5m",
+    "return_15m",
+    "return_60m",
+    "rsi_14",
+    "atr_14_pct",
+    "macd_hist_pct",
+    "adx_14",
+    "bollinger_z20",
+    "bollinger_width20",
+    "vwap_60_gap",
+    "volume_z20",
+    "fib_range_120",
+    "range_pct",
+    "trend_60_240",
+    "realized_volatility_60"
+  ],
+  "rows": {
+    "train": 14876,
+    "validation": 5991,
+    "holdout": 4800
+  },
+  "split_timestamps_utc": {
+    "train_validation_boundary": 1788584400,
+    "validation_holdout_boundary": 1790389260,
+    "embargo_seconds": 3600
+  },
+  "transaction_assumptions": {
+    "side": "LONG_SPOT_ONLY",
+    "fee_per_side": 0.001,
+    "slippage_per_side": 0.0005,
+    "order_usdt": 100.0,
+    "initial_equity_usdt": 10000.0,
+    "max_simultaneous": 2,
+    "pair_cooldown_seconds": 1800,
+    "max_holding_minutes": 15,
+    "entry": "next_candle_open",
+    "same_bar_stop_and_take_profit": "STOP_FIRST",
+    "stop": "1.6x ATR14, clamped to 0.3%-3%",
+    "take_profit": "1.8x stop_distance"
+  },
+  "source_manifest": [
+    {
+      "pair": "BTC-USD",
+      "bars": 129599,
+      "sha256": "67b58f2ad38d72edc30ce356fd9c3867c22e48a2c04f97e3f81b327bc5b720b1",
+      "source": "https://api.exchange.coinbase.com",
+      "file": "data/raw/COINBASE_BTCUSD_90D_1M.csv"
+    },
+    {
+      "pair": "ETH-USD",
+      "bars": 129599,
+      "sha256": "e4f539bd7246a096236a01bee3465678c8e6113dc66ef7914b3b77bf92b04065",
+      "source": "https://api.exchange.coinbase.com",
+      "file": "data/raw/COINBASE_ETHUSD_90D_1M.csv"
+    },
+    {
+      "pair": "SOL-USD",
+      "bars": 129593,
+      "sha256": "65e3d5cd38b35a49db04863e2a4ca7c6775f3f7c0b75cf6af4b79afe87b35640",
+      "source": "https://api.exchange.coinbase.com",
+      "file": "data/raw/COINBASE_SOLUSD_90D_1M.csv"
+    }
+  ],
+  "validation_candidates": [
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.5,
+      "signals": 29,
+      "paper_pnl_usdt": -7.548,
+      "profit_factor": 0.3961
+    },
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.55,
+      "signals": 26,
+      "paper_pnl_usdt": -6.509,
+      "profit_factor": 0.4325
+    },
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.6,
+      "signals": 20,
+      "paper_pnl_usdt": -5.031,
+      "profit_factor": 0.4535
+    },
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.65,
+      "signals": 17,
+      "paper_pnl_usdt": -3.845,
+      "profit_factor": 0.4953
+    },
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.7,
+      "signals": 15,
+      "paper_pnl_usdt": -3.691,
+      "profit_factor": 0.4978
+    },
+    {
+      "model": "LogisticRegression",
+      "threshold": 0.75,
+      "signals": 12,
+      "paper_pnl_usdt": -1.982,
+      "profit_factor": 0.6486
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.5,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.55,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.6,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.65,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.7,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "RandomForest",
+      "threshold": 0.75,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.5,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.55,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.6,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.65,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.7,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    },
+    {
+      "model": "HistGradientBoosting",
+      "threshold": 0.75,
+      "signals": 0,
+      "paper_pnl_usdt": 0.0,
+      "profit_factor": null
+    }
+  ],
+  "limitations": [
+    "Research only, never live execution or futures fills",
+    "Uses only 1m OHLCV of 3 USD markets, not global top 100 or news/fundamentals/order books",
+    "Intrabar candle path unknown; stop-first convention is conservative, gaps approximated",
+    "No latency, exchange outage, borrow, margin, futures funding or liquidation model",
+    "Equity assumes fixed 100 USDT trades, ignores portfolio margin/mark-to-market",
+    "One chronological holdout is not proof of future profitability"
+  ],
+  "holdout_evaluated": false,
+  "holdout": null,
+  "validation_best": null,
+  "selection_rule": "actual_exit_time_and_30m_post_exit_cooldown"
+}
