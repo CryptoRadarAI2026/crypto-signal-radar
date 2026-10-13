@@ -1,0 +1,43 @@
+name: Historical Market AI Research V12 (Diagnostics Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research-v12:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check V12 Python syntax
+        run: |
+          python -m py_compile ai-research/v12/research_v12.py
+
+      - name: Verify V11 metrics file exists
+        run: |
+          test -f ai-research/v12/metrics.json
+
+      - name: Analyze V11 validation results
+        run: |
+          python ai-research/v12/research_v12.py \
+            --input ai-research/v12/metrics.json \
+            --output reports/v12/diagnostics.json
+
+      - name: Upload V12 diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v12-diagnostic-report
+          path: reports/v12/
+          if-no-files-found: warn
+          retention-days: 30
