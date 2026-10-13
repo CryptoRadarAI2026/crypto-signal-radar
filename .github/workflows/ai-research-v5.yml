@@ -1,0 +1,23 @@
+name: AI Research V5 Diagnostic (Paper Only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install numpy scikit-learn 'aiohttp>=3.10,<4'
+      - name: Download missing public historical candles and run diagnostics
+        run: python ai-research/v5/diagnostic_v5.py --data-dir data/raw --days 90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-research-v5-diagnostics
+          path: reports/v5/
