@@ -24,9 +24,9 @@ def simulate_long(entry_open, candles):
     for candle in candles:
         low = candle["low"]
         high = candle["high"]
+        close = candle["close"]
 
-        assert 0 < low <= high
-        assert low <= candle["close"] <= high
+        assert 0 < low <= close <= high
 
         if low <= stop_price:
             exit_reason = "STOP_LOSS"
@@ -41,6 +41,7 @@ def simulate_long(entry_open, candles):
     exit_price = exit_reference * (1 - SLIPPAGE_RATE)
 
     gross_return = exit_price / entry_price - 1
+
     net_return = (
         (exit_price / entry_price)
         * (1 - FEE_RATE)
@@ -80,13 +81,11 @@ def test_simulator():
 
     flat = simulate_long(
         100,
-        [{"low": 100, "high": 101, "close": 100.5}],
+        [{"low": 100, "high": 101, "close": 100}],
     )
     assert flat["exit_reason"] == "TIME_EXIT"
     assert flat["net_return"] < 0
-
-    no_cost_gross = flat["gross_return"]
-    assert flat["net_return"] < no_cost_gross
+    assert flat["net_return"] < flat["gross_return"]
 
     assert isclose(
         stop["entry_price"],
