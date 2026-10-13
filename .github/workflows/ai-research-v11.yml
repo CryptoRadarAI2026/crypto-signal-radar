@@ -1,0 +1,48 @@
+name: Historical Market AI Research V11 (Validation Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Public historical candles (90 or 120 days)'
+        required: true
+        type: choice
+        default: '90'
+        options: ['90', '120']
+permissions:
+  contents: read
+concurrency:
+  group: ai-research-v11-manual
+  cancel-in-progress: false
+jobs:
+  research-v11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    defaults:
+      run:
+        working-directory: ai-research
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ai-research/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: V11 isolated safety tests
+        run: python -m unittest discover -s v11/tests -v
+      - name: Historical research validation only (NO HOLDOUT / NO ORDERS)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reports/v11
+          python -u v11/research_v11.py --days '${{ inputs.days }}' 2>&1 | tee reports/v11/pipeline.log
+      - name: Save research diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v11-report-${{ github.run_id }}
+          path: ai-research/reports/v11/
+          retention-days: 14
+          if-no-files-found: warn
