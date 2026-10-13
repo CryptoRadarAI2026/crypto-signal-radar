@@ -1,0 +1,54 @@
+name: Historical Market AI Research (Paper Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of 1-minute public OHLCV (90 or 120)'
+        required: true
+        default: '90'
+        type: choice
+        options:
+          - '90'
+          - '120'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-research-manual
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        working-directory: ai-research
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ai-research/requirements.txt
+      - name: Install research dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Offline correctness tests
+        run: python -m unittest discover -s tests -v
+      - name: Download REAL public candles and train RESEARCH-ONLY model
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          python train_public_data.py --days '${{ inputs.days }}' 2>&1 | tee reports/pipeline.log
+      - name: Save reports (no live trading)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-report-${{ github.run_id }}
+          path: |
+            ai-research/reports/
+          if-no-files-found: warn
+          retention-days: 14
