@@ -58,15 +58,22 @@ def test_simulator():
 
     accepted = select_trades(candidates)
 
-    assert len(accepted) == 3
+    assert len(accepted) == 4
+
     assert [t["pair"] for t in accepted] == [
-        "BTC", "ETH", "BTC"
+        "BTC", "ETH", "SOL", "BTC"
     ]
+
+    assert [
+        int((t["entry"] - start).total_seconds() / 60)
+        for t in accepted
+    ] == [0, 1, 6, 35]
 
     assert TRADING_ENABLED is False
     assert HOLDOUT_EVALUATED is False
 
     print("V7 SYNTHETIC SELF-TEST PASSED")
+    print("Accepted trades:", len(accepted))
     print("Trading enabled: False")
     print("Holdout evaluated: False")
 
