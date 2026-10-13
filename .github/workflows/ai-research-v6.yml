@@ -1,0 +1,21 @@
+name: AI Research V6 Self Test (Paper Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run V6 synthetic self-test
+        run: python ai-research/v6/diagnostic_v6.py
