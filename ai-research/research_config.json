@@ -1,0 +1,62 @@
+{
+  "version": "V24.7",
+  "status": "RESEARCH_ONLY_NOT_APPROVED",
+  "safety": {
+    "research_only": true,
+    "trading_enabled": false,
+    "live_orders_enabled": false,
+    "exchange_order_access": false,
+    "model_approved": false,
+    "allow_real_capital": false
+  },
+  "approval": {
+    "automatic_approval": false,
+    "trading_approval": false,
+    "execution_ready": false
+  },
+  "market": {"symbol": "BTC", "reference_pair": "BTC-USD", "candle_interval_minutes": 1},
+  "execution_assumptions": {
+    "mode": "historical_simulation_only",
+    "signal_at_completed_candle": true,
+    "earliest_entry": "next_candle_open",
+    "same_candle_stop_and_target_policy": "stop_first",
+    "gap_through_stop_policy": "adverse_open_with_slippage",
+    "allow_execution_ready_claim": false,
+    "market_order_fee_fraction_per_side": 0.0006,
+    "base_slippage_fraction_per_side": 0.0002,
+    "stress_slippage_fraction_per_side": 0.001
+  },
+  "portfolio": {
+    "initial_capital_usdt": 10000,
+    "reserve_capital_fraction": 0.2,
+    "fixed_position_count_limit": 1
+  },
+  "risk_management": {
+    "risk_per_position_fraction": 0.005,
+    "max_total_planned_risk_fraction": 0.02,
+    "max_daily_loss_fraction": 0.02,
+    "max_gross_notional_to_equity": 1.0,
+    "maximum_simulated_leverage": 1,
+    "allow_widening_protective_stop": false,
+    "emergency_stop_enabled": true
+  },
+  "position_management": {"maximum_holding_minutes": 360},
+  "research": {
+    "holding_minutes": [30, 60, 120, 240],
+    "stop_loss_pct": [0.005, 0.01],
+    "take_profit_pct": [0.01, 0.02],
+    "risk_fraction": 0.001,
+    "fast_ema": 12,
+    "slow_ema": 26,
+    "rsi_period": 14,
+    "long_rsi_min": 50,
+    "short_rsi_max": 50,
+    "allow_short": false,
+    "minimum_history": 100,
+    "min_trade_count_validation": 10,
+    "embargo_minutes": 240,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2,
+    "holdout_fraction": 0.2
+  }
+}
