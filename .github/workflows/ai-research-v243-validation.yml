@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   model-validation:
@@ -26,8 +27,55 @@ jobs:
         run: |
           set -euo pipefail
           test -s ai-research/v243/validate.py
+          python -m py_compile ai-research/v243/validate.py
 
-      - name: Download V24.2 research reports
-        uses: dawidd6/action-download-artifact@v6
+      - name: Download latest successful V24.2 reports
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports/v243
+
+          RUN_ID="$(
+            gh run list \
+              --workflow ai-research-v242-data-audit.yml \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId'
+          )"
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful V24.2 run found"
+            exit 1
+          fi
+
+          echo "Using V24.2 run: $RUN_ID"
+
+          gh run download "$RUN_ID" \
+            --name v242-real-data-audit-reports \
+            --dir .
+
+          test -s reports/real_data_training.json
+          test -s reports/v242/real_data_audit.json
+
+      - name: Validate research model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ai-research/v243/validate.py \
+            --training reports/real_data_training.json \
+            --audit reports/v242/real_data_audit.json \
+            --source ai-research/train_public_data.py \
+            --output reports/v243/model_validation.json
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          workflow
+          name: v243-model-validation-report
+          path: reports/v243/
+          if-no-files-found: warn
+          retention-days: 30
