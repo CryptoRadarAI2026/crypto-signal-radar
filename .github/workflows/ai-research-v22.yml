@@ -1,0 +1,29 @@
+name: AI Research V22 - Pre-Holdout Data Quality
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v22:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run synthetic V22 quality tests only
+        run: python ai-research/v22/quality_v22.py
+      - name: Upload V22 quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v22-quality
+          path: reports/v22/quality.json
+          if-no-files-found: error
+          retention-days: 30
