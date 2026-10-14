@@ -1,1 +1,33 @@
+name: AI Research V24.3 - Model Validation
 
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model-validation:
+    name: V24.3 Model Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify validation script
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ai-research/v243/validate.py
+
+      - name: Download V24.2 research reports
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow
