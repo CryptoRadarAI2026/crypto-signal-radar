@@ -10,7 +10,6 @@ jobs:
   diagnostics:
     name: V24 Market Data Diagnostics
     runs-on: ubuntu-latest
-
     timeout-minutes: 45
 
     steps:
@@ -27,13 +26,14 @@ jobs:
           mkdir -p reports/v24
 
       - name: Download public market data
+        shell: bash
         run: |
+          set -o pipefail
           python ai-research/train_public_data.py \
             --days 90 \
             2>&1 | tee reports/v24/data_pipeline.log
 
       - name: Locate OHLCV CSV files
-        id: locate
         shell: bash
         run: |
           find . -type f -name "*.csv" \
@@ -46,4 +46,51 @@ jobs:
       - name: Run V24 diagnostics
         shell: bash
         run: |
-          python - <<'
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          csv_list = Path("reports/v24/csv_files.txt")
+
+          files = [
+              line.strip()
+              for line in csv_list.read_text().splitlines()
+              if line.strip()
+          ]
+
+          if not files:
+              raise SystemExit(
+                  "No CSV files found for V24 diagnostics"
+              )
+
+          print(f"Found {len(files)} CSV files")
+
+          for index, file in enumerate(files):
+              output = (
+                  f"reports/v24/diagnostics_{index}.json"
+              )
+
+              print(f"Checking: {file}")
+
+              subprocess.run(
+                  [
+                      "python",
+                      "ai-research/v24/diagnose.py",
+                      "--input",
+                      file,
+                      "--output",
+                      output,
+                  ],
+                  check=True,
+              )
+
+          print("V24 diagnostics completed")
+          PY
+
+      - name: Upload V24 reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v24-diagnostics-reports
+          path: reports/v24/
+          retention-days: 30
