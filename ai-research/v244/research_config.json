@@ -1,0 +1,65 @@
+{
+  "version": "V24.4",
+  "project": "BTC Intelligent Research Engine",
+  "status": "RESEARCH_ONLY_NOT_APPROVED",
+
+  "safety": {
+    "research_only": true,
+    "trading_enabled": false,
+    "live_orders_enabled": false,
+    "exchange_order_access": false,
+    "model_approved": false
+  },
+
+  "market": {
+    "symbol": "BTC",
+    "market_type": "futures_simulation",
+    "analysis_interval_minutes": 1,
+    "allowed_signals": [
+      "LONG",
+      "SHORT",
+      "WAIT"
+    ],
+    "hedge_mode_simulation": true
+  },
+
+  "portfolio": {
+    "initial_capital_usdt": 10000,
+    "dynamic_position_sizing": true,
+    "allow_multiple_positions": true,
+    "fixed_position_count_limit": null,
+    "reserve_capital_fraction": 0.2
+  },
+
+  "risk_management": {
+    "independent_risk_engine": true,
+    "risk_per_position_fraction": 0.005,
+    "max_total_planned_risk_fraction": 0.02,
+    "max_daily_loss_fraction": 0.02,
+    "max_gross_notional_to_equity": 2.0,
+    "maximum_simulated_leverage": 10,
+    "enforce_liquidation_checks": true,
+    "enforce_portfolio_exposure_checks": true,
+    "allow_widening_protective_stop": false,
+    "emergency_stop_enabled": true
+  },
+
+  "position_management": {
+    "dynamic_take_profit": true,
+    "volatility_based_stop_loss": true,
+    "trailing_stop_enabled": true,
+    "evaluate_open_positions_every_minute": true,
+    "maximum_holding_minutes": 360,
+    "allow_independent_position_exits": true
+  },
+
+  "research": {
+    "compare_long_short_wait": true,
+    "compare_hedge_vs_net_position": true,
+    "include_trading_fees": true,
+    "include_funding_costs": true,
+    "include_slippage": true,
+    "include_liquidation_scenarios": true,
+    "require_out_of_sample_validation": true
+  }
+}
