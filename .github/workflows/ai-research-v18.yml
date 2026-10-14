@@ -1,0 +1,54 @@
+name: AI Research V18 - Data Integrity and Validation Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies for V16 baseline
+        run: python -m pip install numpy scikit-learn
+      - name: Download historical data and save common UTC end
+        shell: bash
+        run: |
+          mkdir -p data/raw
+          python - <<'PY'
+          import sys
+          import time
+          from pathlib import Path
+          sys.path.insert(0, 'ai-research')
+          from train_public_data import download
+          from v11.research_v11 import PAIRS
+          days = 90
+          end = int(time.time()) // 86400 * 86400
+          start = end - days * 86400
+          Path('data/raw/download_end_utc.txt').write_text(str(end), encoding='utf-8')
+          for pair in PAIRS:
+              path = Path('data/raw') / f"COINBASE_{pair.replace('-', '')}_{days}D_1M.csv"
+              print(pair, download(pair, start, end, path), flush=True)
+          PY
+      - name: Reproduce V16 validation baseline
+        run: python ai-research/v16/diagnostics_v16.py
+      - name: Run V18 protected-holdout data audit
+        shell: bash
+        run: |
+          python ai-research/v18/diagnostics_v18.py --end "$(cat data/raw/download_end_utc.txt)"
+      - name: Upload V18 report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v18-report
+          path: reports/v18/data_integrity_and_validation.json
+          if-no-files-found: error
+          retention-days: 30
