@@ -1,0 +1,59 @@
+name: AI Research V16 - Trade Origin and Exit Scenarios
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v16:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install numpy scikit-learn
+
+      - name: Download historical data
+        run: |
+          mkdir -p data/raw
+          python - <<'PY'
+          import sys
+          import time
+          from pathlib import Path
+
+          sys.path.insert(0, "ai-research")
+          from train_public_data import download
+          from v11.research_v11 import PAIRS
+
+          days = 90
+          end = int(time.time()) // 86400 * 86400
+          start = end - days * 86400
+
+          for pair in PAIRS:
+              path = Path("data/raw") / (
+                  f"COINBASE_{pair.replace('-', '')}_{days}D_1M.csv"
+              )
+              meta = download(pair, start, end, path)
+              print(pair, meta, flush=True)
+          PY
+
+      - name: Run V16 diagnostics
+        run: python ai-research/v16/diagnostics_v16.py
+
+      - name: Upload V16 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v16-trade-exit-diagnostics
+          path: reports/v16/trade_exit_diagnostics.json
+          if-no-files-found: warn
