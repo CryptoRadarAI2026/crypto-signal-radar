@@ -9,9 +9,8 @@ on:
         required: true
         default: false
 
-  # Enable only after successful manual restore test:
-  # schedule:
-  #   - cron: "10 * * * *"
+  schedule:
+    - cron: "10 * * * *"
 
 permissions:
   contents: read
