@@ -1,0 +1,63 @@
+name: V24.5 BTC Backtest Correctness Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  correctness-tests:
+    name: BTC Backtest Correctness Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile ai-research/v245/backtest_engine.py
+          python -m py_compile ai-research/v245/test_backtest_correctness.py
+
+      - name: Run correctness tests
+        run: |
+          python -m unittest discover \
+            -s ai-research/v245 \
+            -p "test_backtest_correctness.py" \
+            -v
+
+      - name: Confirm research-only configuration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("ai-research/v245/research_config.json")
+          config = json.loads(path.read_text(encoding="utf-8"))
+
+          assert config["status"] == "RESEARCH_ONLY_NOT_APPROVED"
+
+          safety = config["safety"]
+
+          assert safety["research_only"] is True
+          assert safety["trading_enabled"] is False
+          assert safety["live_orders_enabled"] is False
+          assert safety["exchange_order_access"] is False
+          assert safety["model_approved"] is False
+          assert safety["allow_real_capital"] is False
+
+          approval = config["approval"]
+
+          assert approval["automatic_approval"] is False
+          assert approval["trading_approval"] is False
+          assert approval["execution_ready"] is False
+
+          print("Research-only safety configuration verified.")
+          PY
