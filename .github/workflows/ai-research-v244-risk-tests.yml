@@ -29,12 +29,14 @@ jobs:
         run: |
           python -m py_compile \
             ai-research/v244/risk_engine.py \
-            ai-research/v244/test_risk_engine.py
+            ai-research/v244/test_risk_engine.py \
+            ai-research/v244/position_manager.py \
+            ai-research/v244/test_position_manager.py
 
-      - name: Run risk engine tests
+      - name: Run all V24.4 tests
         run: |
           cd ai-research/v244
-          python -m unittest -v test_risk_engine
+          python -m unittest discover -v -p "test_*.py"
 
       - name: Verify research-only configuration
         run: |
