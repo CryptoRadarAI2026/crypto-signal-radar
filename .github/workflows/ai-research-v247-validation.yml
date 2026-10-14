@@ -1,280 +1,326 @@
-"""V24.7 chronological parameter comparison. Validation selects; holdout evaluated once."""
+name: V24.7 BTC Research Validation
 
-import argparse
-import csv
-import hashlib
-import itertools
-import json
-from datetime import datetime, timezone
-from pathlib import Path
+on:
+  workflow_dispatch:
 
-import backtest_engine as engine
-from signal_generator import generate_signals
+permissions:
+  contents: read
 
-HERE = Path(__file__).resolve().parent
+jobs:
+  validate:
+    name: BTC Research Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
 
-ROOT = HERE.parents[1]
-DEFAULT_OUTPUT = ROOT / "research-output" / "v247" / "validation_report.json"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-def audit(path, candles):
-    raw = path.read_bytes()
+      - name: Create output directories
+        run: |
+          mkdir -p research-data/v247
+          mkdir -p research-output/v247
 
-    return {
-        "source_file": path.name,
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "candles": len(candles),
-        "start_utc": datetime.fromtimestamp(
-            candles[0].timestamp, timezone.utc
-        ).isoformat(),
-        "end_utc": datetime.fromtimestamp(
-            candles[-1].timestamp, timezone.utc
-        ).isoformat(),
-        "timestamp_continuity_checked": True,
-        "origin_verified": False,
-        "origin_note": (
-            "SHA256 proves file identity only, "
-            "not Coinbase provenance."
-        ),
-    }
+      - name: Download BTC-USD historical candles
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
 
+          DATA_DIR = Path("research-data/v247")
+          OUTPUT_DIR = Path("research-output/v247")
 
-def validate_candles(candles):
-    if len(candles) < 1000:
-        raise ValueError("Need at least 1000 candles")
+          DATA_DIR.mkdir(parents=True, exist_ok=True)
+          OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if any(c.timestamp % 60 for c in candles):
-        raise ValueError("Non-minute-aligned timestamp")
+          CSV_PATH = DATA_DIR / "btc_usd_1m.csv"
+          AUDIT_PATH = OUTPUT_DIR / "data_audit.json"
 
-    for a, b in zip(candles, candles[1:]):
-        if b.timestamp - a.timestamp != 60:
-            raise ValueError(
-                "Missing, duplicated, or unordered minute candles"
-            )
+          GRANULARITY = 60
+          DAYS = 14
+          REQUESTED = DAYS * 24 * 60
 
+          # Latest fully completed UTC minute.
+          now = int(time.time())
+          end_ts = (now // 60) * 60
+          start_ts = end_ts - REQUESTED * 60
 
-def simulate(candles, config, settings, params):
-    holding, stop, target = params
+          base_url = (
+              "https://api.exchange.coinbase.com/"
+              "products/BTC-USD/candles"
+          )
 
-    signals = generate_signals(
-        candles,
-        engine,
-        settings,
-        stop,
-        target,
-        holding,
-    )
+          headers = {
+              "User-Agent": "CryptoRadarAI2026-Research/24.7",
+              "Accept": "application/json",
+          }
 
-    result = engine.BTCBacktestEngine(config).run(
-        candles,
-        signals,
-    )
+          candles = {}
+          errors = []
+          cursor = start_ts
 
-    return {
-        "holding_minutes": holding,
-        "stop_loss_pct": stop,
-        "take_profit_pct": target,
-        "signals": len(signals),
-        "trades": result["closed_trades"],
-        "net_pnl_usdt": result["net_pnl_usdt"],
-        "return_pct": result["return_pct"],
-        "profit_factor": result["profit_factor"],
-        "max_drawdown_pct": result["max_drawdown_pct"],
-        "fees_usdt": round(
-            result["total_entry_fees_usdt"]
-            + result["total_exit_fees_usdt"],
-            6,
-        ),
-        "rejected_signals": result["rejected_signals"],
-        "rejection_reasons": result["rejection_reasons"],
-    }
+          while cursor < end_ts:
+              # Coinbase limits requests to 300 candles.
+              next_cursor = min(
+                  cursor + 299 * 60,
+                  end_ts,
+              )
 
+              params = urllib.parse.urlencode(
+                  {
+                      "start": datetime.fromtimestamp(
+                          cursor,
+                          timezone.utc,
+                      ).isoformat(),
+                      "end": datetime.fromtimestamp(
+                          next_cursor,
+                          timezone.utc,
+                      ).isoformat(),
+                      "granularity": GRANULARITY,
+                  }
+              )
 
-def main():
-    parser = argparse.ArgumentParser()
+              url = base_url + "?" + params
+              response_data = None
 
-    parser.add_argument(
-        "--candles",
-        required=True,
-    )
+              for attempt in range(5):
+                  try:
+                      request = urllib.request.Request(
+                          url,
+                          headers=headers,
+                      )
 
-    parser.add_argument(
-        "--output",
-        default=str(DEFAULT_OUTPUT),
-    )
+                      with urllib.request.urlopen(
+                          request,
+                          timeout=30,
+                      ) as response:
+                          response_data = json.loads(
+                              response.read().decode("utf-8")
+                          )
 
-    args = parser.parse_args()
+                      if not isinstance(response_data, list):
+                          raise ValueError(
+                              "Unexpected Coinbase response"
+                          )
 
-    config = json.loads(
-        (HERE / "research_config.json").read_text(
-            encoding="utf-8"
-        )
-    )
+                      break
 
-    engine.verify_safety(config)
+                  except (
+                      urllib.error.URLError,
+                      TimeoutError,
+                      ValueError,
+                  ) as exc:
+                      if attempt == 4:
+                          errors.append(str(exc))
+                      else:
+                          time.sleep(2 * (attempt + 1))
 
-    settings = config["research"]
+              if response_data is None:
+                  raise RuntimeError(
+                      "Candle download failed: "
+                      + "; ".join(errors)
+                  )
 
-    path = Path(args.candles)
+              for row in response_data:
+                  if not isinstance(row, list) or len(row) < 6:
+                      continue
 
-    candles = engine.load_candles_csv(path)
+                  timestamp = int(row[0])
 
-    validate_candles(candles)
+                  if (
+                      timestamp < start_ts
+                      or timestamp >= end_ts
+                      or timestamp % 60 != 0
+                  ):
+                      continue
 
-    n = len(candles)
+                  # Coinbase format:
+                  # [time, low, high, open, close, volume]
+                  candles[timestamp] = {
+                      "timestamp": timestamp,
+                      "open": float(row[3]),
+                      "high": float(row[2]),
+                      "low": float(row[1]),
+                      "close": float(row[4]),
+                      "volume": float(row[5]),
+                  }
 
-    train_end = int(
-        n * settings["train_fraction"]
-    )
+              cursor = next_cursor
+              time.sleep(0.15)
 
-    validation_end = int(
-        n * (
-            settings["train_fraction"]
-            + settings["validation_fraction"]
-        )
-    )
+          if not candles:
+              raise RuntimeError("No candles downloaded")
 
-    embargo = settings["embargo_minutes"]
+          ordered = [
+              candles[t]
+              for t in sorted(candles)
+          ]
 
-    warmup = settings["minimum_history"] + 2
+          # Find longest continuous one-minute segment.
+          segments = []
+          current = [ordered[0]]
 
-    if embargo < max(settings["holding_minutes"]):
-        raise ValueError(
-            "Embargo must cover maximum holding period"
-        )
+          for candle in ordered[1:]:
+              if (
+                  candle["timestamp"]
+                  - current[-1]["timestamp"]
+                  == 60
+              ):
+                  current.append(candle)
+              else:
+                  segments.append(current)
+                  current = [candle]
 
-    # Training is reserved for future model fitting.
-    # This baseline has no fitted parameters.
-    # Validation and holdout use local indicator warmup.
+          segments.append(current)
 
-    val_start = train_end + embargo
+          selected = max(
+              segments,
+              key=len,
+          )
 
-    hold_start = validation_end + embargo
+          if len(selected) < 1000:
+              raise RuntimeError(
+                  "Insufficient contiguous candles"
+              )
 
-    if (
-        validation_end - val_start < warmup + 100
-        or n - hold_start < warmup + 100
-    ):
-        raise ValueError(
-            "Not enough independent validation/holdout candles"
-        )
+          with CSV_PATH.open(
+              "w",
+              newline="",
+              encoding="utf-8",
+          ) as file:
+              writer = csv.writer(file)
 
-    validation = candles[
-        val_start:validation_end
-    ]
+              writer.writerow(
+                  [
+                      "timestamp",
+                      "open",
+                      "high",
+                      "low",
+                      "close",
+                      "volume",
+                  ]
+              )
 
-    holdout = candles[
-        hold_start:
-    ]
+              for candle in selected:
+                  writer.writerow(
+                      [
+                          candle["timestamp"],
+                          candle["open"],
+                          candle["high"],
+                          candle["low"],
+                          candle["close"],
+                          candle["volume"],
+                      ]
+                  )
 
-    candidates = list(
-        itertools.product(
-            settings["holding_minutes"],
-            settings["stop_loss_pct"],
-            settings["take_profit_pct"],
-        )
-    )
+          sha256 = hashlib.sha256(
+              CSV_PATH.read_bytes()
+          ).hexdigest()
 
-    rows = [
-        simulate(
-            validation,
-            config,
-            settings,
-            params,
-        )
-        for params in candidates
-    ]
+          audit = {
+              "version": "V24.7",
+              "status": "RESEARCH_ONLY_NOT_APPROVED",
+              "source": "Coinbase Exchange public API",
+              "requested_days": DAYS,
+              "requested_candles": REQUESTED,
+              "received_unique_candles": len(ordered),
+              "selected_contiguous_candles": len(selected),
+              "selected_start": selected[0]["timestamp"],
+              "selected_end": selected[-1]["timestamp"],
+              "sha256": sha256,
+              "errors": errors,
+              "data_origin_verified": False,
+              "research_only": True,
+              "trading_enabled": False,
+              "note": (
+                  "Public API download; independent source "
+                  "authentication not performed."
+              ),
+          }
 
-    eligible = [
-        row
-        for row in rows
-        if row["trades"]
-        >= settings["min_trade_count_validation"]
-    ]
+          AUDIT_PATH.write_text(
+              json.dumps(
+                  audit,
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
 
-    chosen = (
-        max(
-            eligible,
-            key=lambda row: (
-                row["net_pnl_usdt"],
-                -row["max_drawdown_pct"],
-            ),
-        )
-        if eligible
-        else None
-    )
+          print(json.dumps(audit, indent=2))
+          PY
 
-    final = None
+      - name: Run V24.7 research validation
+        shell: bash
+        run: |
+          python ai-research/v247/run_validation.py \
+            --candles research-data/v247/btc_usd_1m.csv \
+            --output research-output/v247/validation_report.json
 
-    if chosen:
-        params = (
-            chosen["holding_minutes"],
-            chosen["stop_loss_pct"],
-            chosen["take_profit_pct"],
-        )
+      - name: Verify validation report
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-        final = simulate(
-            holdout,
-            config,
-            settings,
-            params,
-        )
+          path = Path(
+              "research-output/v247/validation_report.json"
+          )
 
-    report = {
-        "version": "V24.7",
-        "status": "RESEARCH_ONLY_NOT_APPROVED",
-        "data_audit": audit(path, candles),
-        "split": {
-            "train_end_index": train_end,
-            "validation_start_index": val_start,
-            "validation_end_index": validation_end,
-            "holdout_start_index": hold_start,
-            "embargo_minutes": embargo,
-            "train_is_reserved": True,
-        },
-        "validation_candidates": rows,
-        "selected_on_validation_only": chosen,
-        "holdout_one_pass": final,
-        "methodology": [
-            "Baseline indicators are deterministic; no model is trained.",
-            "Independent chronological validation and holdout windows with embargo.",
-            "Indicator warmup is local to each evaluation window.",
-            "Parameter selection uses validation only; holdout is run once.",
-            "Not walk-forward: future V24.8 work.",
-            "No ATR stops, trailing stops, partial exits, funding, or liquidation.",
-            "BTC-USD spot candles are not futures fills.",
-            "File origin is unverified; hash is for reproducibility.",
-            "Small sample sizes invalidate strong profitability claims.",
-        ],
-    }
+          if not path.is_file():
+              raise SystemExit(
+                  "ERROR: validation_report.json not found"
+              )
 
-    output = Path(args.output)
+          report = json.loads(
+              path.read_text(encoding="utf-8")
+          )
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+          if report.get("version") != "V24.7":
+              raise SystemExit(
+                  "ERROR: Unexpected report version"
+              )
 
-    output.write_text(
-        json.dumps(
-            report,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+          if report.get("status") != (
+              "RESEARCH_ONLY_NOT_APPROVED"
+          ):
+              raise SystemExit(
+                  "ERROR: Research safety status mismatch"
+              )
 
-    print(
-        json.dumps(
-            {
-                "report": str(output),
-                "selected": chosen,
-                "holdout": final,
-            },
-            indent=2,
-        )
-    )
+          if "holdout_one_pass" not in report:
+              raise SystemExit(
+                  "ERROR: Holdout result field missing"
+              )
 
+          print("Validation report exists and is readable.")
+          print(
+              "Holdout result:",
+              report["holdout_one_pass"],
+          )
+          PY
 
-if __name__ == "__main__":
-    main()
+      - name: Upload V24.7 research reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v247-research-reports
+          path: |
+            research-output/v247/data_audit.json
+            research-output/v247/validation_report.json
+          if-no-files-found: warn
+          retention-days: 30
