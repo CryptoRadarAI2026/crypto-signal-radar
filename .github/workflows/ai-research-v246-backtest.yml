@@ -1,0 +1,378 @@
+name: V24.6 BTC Historical Research Backtest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  btc-historical-backtest:
+    name: BTC Historical Research Backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile \
+            ai-research/v245/backtest_engine.py \
+            ai-research/v246/run_historical_backtest.py
+
+      - name: Verify V24.5 safety tests
+        run: |
+          python -m unittest discover \
+            -s ai-research/v245 \
+            -p "test_backtest_engine.py" \
+            -v
+
+      - name: Verify V24.5 correctness tests
+        run: |
+          python -m unittest discover \
+            -s ai-research/v245 \
+            -p "test_backtest_correctness.py" \
+            -v
+
+      - name: Prepare research directories
+        run: |
+          mkdir -p research-output/v246
+          mkdir -p research-data/v246
+
+      - name: Download and audit BTC candles
+        run: |
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          PRODUCT = "BTC-USD"
+          GRANULARITY = 60
+
+          # Research sample: approximately 14 days.
+          # Coinbase limits the number of candles
+          # returned by a single request.
+          DAYS = 14
+          BATCH_CANDLES = 250
+
+          output_dir = Path("research-data/v246")
+          report_dir = Path("research-output/v246")
+
+          output_dir.mkdir(parents=True, exist_ok=True)
+          report_dir.mkdir(parents=True, exist_ok=True)
+
+          csv_path = output_dir / "btc_usd_1m.csv"
+          audit_path = report_dir / "data_audit.json"
+
+          end_ts = int(time.time()) // 60 * 60
+
+          # Exclude the currently forming candle.
+          end_ts -= 60
+
+          start_ts = end_ts - DAYS * 86400
+
+          rows = {}
+          errors = []
+
+          def iso(timestamp):
+              return datetime.fromtimestamp(
+                  timestamp,
+                  tz=timezone.utc
+              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          for batch_start in range(
+              start_ts,
+              end_ts,
+              BATCH_CANDLES * GRANULARITY
+          ):
+              batch_end = min(
+                  batch_start + BATCH_CANDLES * GRANULARITY,
+                  end_ts
+              )
+
+              params = urllib.parse.urlencode({
+                  "start": iso(batch_start),
+                  "end": iso(batch_end),
+                  "granularity": GRANULARITY,
+              })
+
+              url = (
+                  "https://api.exchange.coinbase.com/"
+                  "products/BTC-USD/candles?"
+                  + params
+              )
+
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "BTC-Research-V246/1.0",
+                      "Accept": "application/json",
+                  }
+              )
+
+              response_data = None
+
+              for attempt in range(5):
+                  try:
+                      with urllib.request.urlopen(
+                          request,
+                          timeout=30
+                      ) as response:
+                          response_data = json.load(response)
+                      break
+                  except (
+                      urllib.error.URLError,
+                      TimeoutError,
+                      json.JSONDecodeError
+                  ) as exc:
+                      if attempt == 4:
+                          errors.append(str(exc))
+                      else:
+                          time.sleep(2 ** attempt)
+
+              if response_data is None:
+                  continue
+
+              if not isinstance(response_data, list):
+                  errors.append(
+                      "Unexpected Coinbase response"
+                  )
+                  continue
+
+              for item in response_data:
+                  if (
+                      not isinstance(item, list)
+                      or len(item) < 6
+                  ):
+                      errors.append("Invalid candle row")
+                      continue
+
+                  try:
+                      timestamp = int(item[0])
+                      low = float(item[1])
+                      high = float(item[2])
+                      opening = float(item[3])
+                      closing = float(item[4])
+                      volume = float(item[5])
+
+                      if not (
+                          start_ts <= timestamp < end_ts
+                      ):
+                          continue
+
+                      if timestamp % 60 != 0:
+                          raise ValueError(
+                              "Unaligned timestamp"
+                          )
+
+                      if not (
+                          0 < low <= min(opening, closing)
+                          and high >= max(opening, closing)
+                          and high >= low
+                          and volume >= 0
+                      ):
+                          raise ValueError(
+                              "Invalid OHLCV values"
+                          )
+
+                      row = (
+                          timestamp,
+                          opening,
+                          high,
+                          low,
+                          closing,
+                          volume
+                      )
+
+                      if (
+                          timestamp in rows
+                          and rows[timestamp] != row
+                      ):
+                          errors.append(
+                              "Conflicting duplicate candle"
+                          )
+
+                      rows[timestamp] = row
+
+                  except (TypeError, ValueError) as exc:
+                      errors.append(str(exc))
+
+              time.sleep(0.15)
+
+          timestamps = sorted(rows)
+
+          expected = (end_ts - start_ts) // 60
+          missing = expected - len(timestamps)
+
+          longest = []
+          current = []
+
+          for timestamp in timestamps:
+              if (
+                  current
+                  and timestamp != current[-1] + 60
+              ):
+                  if len(current) > len(longest):
+                      longest = current
+                  current = []
+
+              current.append(timestamp)
+
+          if len(current) > len(longest):
+              longest = current
+
+          selected_rows = [
+              rows[timestamp]
+              for timestamp in longest
+          ]
+
+          if selected_rows:
+              with csv_path.open(
+                  "w",
+                  newline="",
+                  encoding="utf-8"
+              ) as file:
+                  writer = csv.writer(file)
+                  writer.writerow([
+                      "timestamp",
+                      "open",
+                      "high",
+                      "low",
+                      "close",
+                      "volume",
+                  ])
+                  writer.writerows(selected_rows)
+
+              digest = hashlib.sha256(
+                  csv_path.read_bytes()
+              ).hexdigest()
+          else:
+              digest = None
+
+          audit = {
+              "version": "V24.6",
+              "status": "RESEARCH_ONLY_NOT_APPROVED",
+              "trading_enabled": False,
+              "source": "Coinbase Exchange public API",
+              "product": PRODUCT,
+              "granularity_seconds": GRANULARITY,
+              "requested_days": DAYS,
+              "requested_candles": expected,
+              "received_unique_candles": len(rows),
+              "missing_candles": missing,
+              "selected_contiguous_candles": len(longest),
+              "selected_start": (
+                  longest[0] if longest else None
+              ),
+              "selected_end": (
+                  longest[-1] if longest else None
+              ),
+              "sha256": digest,
+              "errors": errors[:30],
+              "data_origin_verified": False,
+              "notes": [
+                  "No synthetic candles were inserted.",
+                  "Only the longest continuous segment is used.",
+                  "Exchange API data is not independently authenticated.",
+                  "Selection of a continuous segment may introduce sample bias.",
+                  "This is not an independent holdout validation."
+              ]
+          }
+
+          audit_path.write_text(
+              json.dumps(audit, indent=2),
+              encoding="utf-8"
+          )
+
+          print(json.dumps(audit, indent=2))
+
+          # Reject failed downloads and corrupted data.
+          if errors:
+              raise SystemExit(
+                  "Data download or integrity errors detected"
+              )
+
+          # Minimum 7 continuous days.
+          if len(longest) < 7 * 1440:
+              raise SystemExit(
+                  "Insufficient continuous BTC history"
+              )
+
+          print("BTC historical data audit passed.")
+          PY
+
+      - name: Run BTC research backtest
+        run: |
+          python ai-research/v246/run_historical_backtest.py \
+            --candles research-data/v246/btc_usd_1m.csv \
+            --output research-output/v246/historical_backtest_report.json \
+            --fast-ema 12 \
+            --slow-ema 26 \
+            --rsi-period 14 \
+            --long-rsi-min 50 \
+            --stop-loss-pct 0.01 \
+            --take-profit-pct 0.02 \
+            --max-holding-minutes 60 \
+            --risk-fraction 0.001 \
+            --minimum-history 100
+
+      - name: Verify research-only output
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(
+              "research-output/v246/"
+              "historical_backtest_report.json"
+          )
+
+          report = json.loads(
+              path.read_text(encoding="utf-8")
+          )
+
+          assert report["runner_version"] == "V24.6"
+          assert report["runner_status"] == (
+              "RESEARCH_ONLY_NOT_APPROVED"
+          )
+          assert report["research_only"] is True
+          assert report["trading_enabled"] is False
+          assert report["model_approved"] is False
+          assert report["execution_ready"] is False
+
+          print("Research-only output verified.")
+          print("Closed trades:", report["closed_trades"])
+          print("Net PnL:", report["net_pnl_usdt"])
+          print("Return %:", report["return_pct"])
+          print(
+              "Max drawdown %:",
+              report["max_drawdown_pct"]
+          )
+          PY
+
+      - name: Upload research reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v246-btc-historical-research
+          path: |
+            research-output/v246/
+          if-no-files-found: warn
+          retention-days: 14
