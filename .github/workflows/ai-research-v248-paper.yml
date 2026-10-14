@@ -2,6 +2,12 @@ name: V24.8 BTC Paper Trading
 
 on:
   workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: 'FIRST RUN ONLY: initialize 10000 virtual USD (never use again)'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -13,36 +19,75 @@ concurrency:
 
 jobs:
   paper-trading:
-    name: BTC Paper Trading Research
     runs-on: ubuntu-latest
-
     timeout-minutes: 15
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install numpy scikit-learn
+        run: python -m pip install numpy scikit-learn
 
-      - name: Run V24.8 paper simulator
+      - name: Find and restore previous state (fail closed)
         env:
-          PYTHONUNBUFFERED: "1"
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        shell: bash
         run: |
-          python ai-research/v248/paper.py
+          set -euo pipefail
+          mkdir -p research-output/v248
+          # List artifacts by name; the most recent unexpired artifact is the prior state.
+          artifact_id=$(gh api "repos/$REPO/actions/artifacts?name=v248-paper-state&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].id // empty')
+          if [[ -n "$artifact_id" ]]; then
+            if [[ "$BOOTSTRAP" == 'true' ]]; then
+              echo 'ERROR: previous state exists; bootstrap is forbidden.' >&2
+              exit 1
+            fi
+            gh api "repos/$REPO/actions/artifacts/$artifact_id/zip" > /tmp/v248-state.zip
+            python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          with zipfile.ZipFile('/tmp/v248-state.zip') as z:
+              names = z.namelist()
+              if names != ['state.json']:
+                  raise RuntimeError(f'Unexpected state artifact contents: {names}')
+              raw = z.read('state.json')
+              state = json.loads(raw)
+              if state.get('version') != 'V24.8' or state.get('status') != 'PAPER_TRADING_ONLY':
+                  raise RuntimeError('Invalid restored state')
+              Path('research-output/v248/state.json').write_bytes(raw)
+          PY
+            echo 'V248_BOOTSTRAP=0' >> "$GITHUB_ENV"
+          else
+            if [[ "$BOOTSTRAP" != 'true' ]]; then
+              echo 'ERROR: no previous state artifact. Refusing reset.' >&2
+              exit 1
+            fi
+            echo 'V248_BOOTSTRAP=1' >> "$GITHUB_ENV"
+          fi
 
-      - name: Upload paper trading state and reports
-        if: always()
+      - name: Run observational paper trading
+        run: python ai-research/v248/paper.py
+
+      - name: Persist state for next run
         uses: actions/upload-artifact@v4
         with:
-          name: v248-paper-reports
-          path: research-output/v248/
-          if-no-files-found: warn
+          name: v248-paper-state
+          path: research-output/v248/state.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload readable report
+        uses: actions/upload-artifact@v4
+        with:
+          name: v248-paper-report
+          path: research-output/v248/report.json
+          if-no-files-found: error
           retention-days: 90
