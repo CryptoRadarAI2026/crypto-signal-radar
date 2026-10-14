@@ -9,8 +9,9 @@ on:
         required: true
         default: false
 
-  schedule:
-    - cron: "10 * * * *"
+  # Enable only after successful manual restore test:
+  # schedule:
+  #   - cron: "10 * * * *"
 
 permissions:
   contents: read
@@ -24,7 +25,6 @@ jobs:
   paper-trading:
     name: BTC Paper Trading Research
     runs-on: ubuntu-latest
-
     timeout-minutes: 15
 
     env:
@@ -49,85 +49,115 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          WORKFLOW_FILE: ai-research-v248-paper.yml
-          BOOTSTRAP: ${{ github.event.inputs.bootstrap || 'false' }}
+          BOOTSTRAP: ${{ inputs.bootstrap || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python - <<'PY'
-          import io
           import json
           import os
-          import sys
-          import urllib.request
-          import zipfile
+          import subprocess
+          import tempfile
           from pathlib import Path
 
-          token = os.environ["GH_TOKEN"]
           repo = os.environ["REPO"]
-          workflow = os.environ["WORKFLOW_FILE"]
-          bootstrap = os.environ["BOOTSTRAP"].lower() == "true"
-
-          out = Path("research-output/v248")
-          out.mkdir(parents=True, exist_ok=True)
-          state_path = out / "state.json"
-
-          base = (
-              "https://api.github.com/repos/"
-              + repo
+          bootstrap = (
+              os.environ["BOOTSTRAP"].lower() == "true"
           )
+          event_name = os.environ["EVENT_NAME"]
 
-          headers = {
-              "Authorization": "Bearer " + token,
-              "Accept": "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "V248-paper-research",
-          }
+          state_dir = Path("research-output/v248")
+          state_dir.mkdir(parents=True, exist_ok=True)
 
-          def api_json(url):
-              req = urllib.request.Request(
-                  url,
-                  headers=headers,
-              )
-              with urllib.request.urlopen(
-                  req,
-                  timeout=30,
-              ) as response:
-                  return json.load(response)
+          state_path = state_dir / "state.json"
 
-          def download_artifact(artifact_id):
-              url = (
-                  base
-                  + "/actions/artifacts/"
-                  + str(artifact_id)
-                  + "/zip"
-              )
-              req = urllib.request.Request(
-                  url,
-                  headers=headers,
-              )
-              with urllib.request.urlopen(
-                  req,
+          workflow = "ai-research-v248-paper.yml"
+
+          def gh_json(*args):
+              result = subprocess.run(
+                  ["gh", "api", *args],
+                  check=True,
+                  capture_output=True,
+                  text=True,
                   timeout=60,
-              ) as response:
-                  return response.read()
+              )
+              return json.loads(result.stdout)
 
-          print("Searching previous successful V24.8 runs")
+          def validate_state(data):
+              if not isinstance(data, dict):
+                  raise RuntimeError(
+                      "Invalid state structure"
+                  )
+
+              if data.get("version") != "V24.8":
+                  raise RuntimeError(
+                      "Invalid state version"
+                  )
+
+              if (
+                  data.get("status")
+                  != "PAPER_TRADING_ONLY"
+              ):
+                  raise RuntimeError(
+                      "Invalid state status"
+                  )
+
+              sequence = data.get("sequence")
+
+              if (
+                  not isinstance(sequence, int)
+                  or isinstance(sequence, bool)
+                  or sequence < 1
+              ):
+                  raise RuntimeError(
+                      "Invalid state sequence"
+                  )
+
+              for field in ("cash", "btc"):
+                  value = data.get(field)
+
+                  if (
+                      not isinstance(value, (int, float))
+                      or isinstance(value, bool)
+                      or value < 0
+                  ):
+                      raise RuntimeError(
+                          "Invalid balance: " + field
+                      )
+
+              if not isinstance(
+                  data.get("trades"), list
+              ):
+                  raise RuntimeError(
+                      "Invalid trade history"
+                  )
+
+              if not isinstance(
+                  data.get("events"), list
+              ):
+                  raise RuntimeError(
+                      "Invalid event history"
+                  )
+
+          print("Searching previous successful runs")
 
           runs = []
 
           for page in range(1, 6):
-              url = (
-                  base
-                  + "/actions/workflows/"
-                  + workflow
-                  + "/runs"
-                  + "?status=success"
-                  + "&per_page=100"
-                  + "&page="
-                  + str(page)
+              response = gh_json(
+                  "-X",
+                  "GET",
+                  (
+                      f"repos/{repo}/actions/workflows/"
+                      f"{workflow}/runs"
+                      f"?status=success"
+                      f"&per_page=100"
+                      f"&page={page}"
+                  ),
               )
 
-              response = api_json(url)
-              batch = response.get("workflow_runs", [])
+              batch = response.get(
+                  "workflow_runs", []
+              )
 
               if not batch:
                   break
@@ -138,7 +168,9 @@ jobs:
                   break
 
           runs.sort(
-              key=lambda r: r.get("run_number", 0),
+              key=lambda r: r.get(
+                  "run_number", 0
+              ),
               reverse=True,
           )
 
@@ -150,99 +182,115 @@ jobs:
 
               run_id = run["id"]
 
-              url = (
-                  base
-                  + "/actions/runs/"
-                  + str(run_id)
-                  + "/artifacts"
-                  + "?per_page=100"
+              artifacts_response = gh_json(
+                  "-X",
+                  "GET",
+                  (
+                      f"repos/{repo}/actions/runs/"
+                      f"{run_id}/artifacts"
+                      "?per_page=100"
+                  ),
               )
 
-              result = api_json(url)
+              artifacts = artifacts_response.get(
+                  "artifacts", []
+              )
 
-              artifacts = result.get("artifacts", [])
+              state_artifacts = [
+                  artifact
+                  for artifact in artifacts
+                  if (
+                      artifact.get("name")
+                      == "v248-paper-state"
+                      and not artifact.get(
+                          "expired", False
+                      )
+                  )
+              ]
 
-              for artifact in artifacts:
-                  if artifact.get("expired"):
-                      continue
+              if not state_artifacts:
+                  continue
 
-                  name = artifact.get("name", "")
+              if len(state_artifacts) != 1:
+                  raise RuntimeError(
+                      "Ambiguous state artifacts"
+                  )
 
-                  if "v248" not in name.lower():
-                      continue
+              with tempfile.TemporaryDirectory() as tmp:
+                  subprocess.run(
+                      [
+                          "gh",
+                          "run",
+                          "download",
+                          str(run_id),
+                          "--repo",
+                          repo,
+                          "--name",
+                          "v248-paper-state",
+                          "--dir",
+                          tmp,
+                      ],
+                      check=True,
+                      timeout=120,
+                  )
 
-                  raw = download_artifact(artifact["id"])
+                  matches = list(
+                      Path(tmp).rglob("state.json")
+                  )
 
-                  with zipfile.ZipFile(
-                      io.BytesIO(raw)
-                  ) as archive:
-
-                      matches = [
-                          item
-                          for item in archive.namelist()
-                          if item == "state.json"
-                          or item.endswith("/state.json")
-                      ]
-
-                      if not matches:
-                          continue
-
-                      if len(matches) != 1:
-                          raise RuntimeError(
-                              "Ambiguous state files"
-                          )
-
-                      data = json.loads(
-                          archive.read(matches[0])
+                  if len(matches) != 1:
+                      raise RuntimeError(
+                          "Missing or ambiguous state.json"
                       )
 
-                      if (
-                          data.get("version") != "V24.8"
-                          or data.get("status")
-                          != "PAPER_TRADING_ONLY"
-                      ):
-                          raise RuntimeError(
-                              "Invalid restored state"
-                          )
-
-                      if not isinstance(
-                          data.get("sequence"), int
-                      ):
-                          raise RuntimeError(
-                              "Missing state sequence"
-                          )
-
-                      state_path.write_text(
-                          json.dumps(data, indent=2),
-                          encoding="utf-8",
+                  data = json.loads(
+                      matches[0].read_text(
+                          encoding="utf-8"
                       )
+                  )
 
-                      print(
-                          "Restored state from run",
-                          run.get("run_number"),
-                      )
-                      print(
-                          "Restored sequence:",
-                          data["sequence"],
-                      )
+                  validate_state(data)
 
-                      restored = True
-                      break
+                  state_path.write_text(
+                      json.dumps(
+                          data,
+                          indent=2,
+                      ),
+                      encoding="utf-8",
+                  )
 
-              if restored:
+                  print(
+                      "Restored from run:",
+                      run.get("run_number"),
+                  )
+                  print(
+                      "Restored sequence:",
+                      data["sequence"],
+                  )
+
+                  restored = True
                   break
 
           if restored:
-              print("Previous state restored successfully")
+              print(
+                  "Previous state restored successfully"
+              )
 
           elif bootstrap:
+              if event_name != "workflow_dispatch":
+                  raise RuntimeError(
+                      "Bootstrap forbidden for schedule"
+                  )
+
               if runs:
                   raise RuntimeError(
                       "Previous successful runs exist. "
                       "Refusing unsafe bootstrap."
                   )
 
-              print("No previous runs: bootstrap permitted")
+              print(
+                  "First-run bootstrap permitted"
+              )
 
               with open(
                   os.environ["GITHUB_ENV"],
@@ -256,7 +304,7 @@ jobs:
           else:
               raise RuntimeError(
                   "No previous state found. "
-                  "Refusing to reset virtual capital."
+                  "Refusing capital reset."
               )
           PY
 
@@ -268,53 +316,128 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import math
           from pathlib import Path
 
           folder = Path("research-output/v248")
+
           state_path = folder / "state.json"
           report_path = folder / "report.json"
 
           if not state_path.is_file():
-              raise RuntimeError("Missing state.json")
+              raise RuntimeError(
+                  "Missing state.json"
+              )
 
           if not report_path.is_file():
-              raise RuntimeError("Missing report.json")
+              raise RuntimeError(
+                  "Missing report.json"
+              )
 
           state = json.loads(
-              state_path.read_text(encoding="utf-8")
+              state_path.read_text(
+                  encoding="utf-8"
+              )
           )
 
           report = json.loads(
-              report_path.read_text(encoding="utf-8")
+              report_path.read_text(
+                  encoding="utf-8"
+              )
           )
 
           if state.get("version") != "V24.8":
-              raise RuntimeError("Invalid state version")
+              raise RuntimeError(
+                  "Invalid state version"
+              )
 
           if (
               state.get("status")
               != "PAPER_TRADING_ONLY"
           ):
-              raise RuntimeError("Invalid state status")
+              raise RuntimeError(
+                  "Invalid state status"
+              )
 
-          if report.get("orders_sent") != 0:
-              raise RuntimeError("Real orders detected")
+          if report.get("version") != "V24.8":
+              raise RuntimeError(
+                  "Invalid report version"
+              )
 
           if (
-              state.get("sequence")
-              != report.get("sequence")
+              report.get("status")
+              != "PAPER_TRADING_ONLY"
           ):
+              raise RuntimeError(
+                  "Invalid report status"
+              )
+
+          if report.get("orders_sent") != 0:
+              raise RuntimeError(
+                  "Real orders are forbidden"
+              )
+
+          sequence = state.get("sequence")
+
+          if (
+              not isinstance(sequence, int)
+              or isinstance(sequence, bool)
+              or sequence < 1
+          ):
+              raise RuntimeError(
+                  "Invalid sequence"
+              )
+
+          if sequence != report.get("sequence"):
               raise RuntimeError(
                   "State/report sequence mismatch"
               )
 
+          for field in ("cash", "btc"):
+              value = state.get(field)
+
+              if (
+                  not isinstance(value, (int, float))
+                  or isinstance(value, bool)
+                  or not math.isfinite(value)
+                  or value < 0
+              ):
+                  raise RuntimeError(
+                      "Invalid balance: " + field
+                  )
+
+          if not isinstance(
+              state.get("trades"), list
+          ):
+              raise RuntimeError(
+                  "Invalid trades"
+              )
+
+          if not isinstance(
+              state.get("events"), list
+          ):
+              raise RuntimeError(
+                  "Invalid events"
+              )
+
           print(
-              "State validated. Sequence:",
-              state["sequence"],
+              "Validated sequence:",
+              sequence,
           )
+
           print(
               "Virtual cash:",
               state["cash"],
+          )
+
+          print(
+              "Virtual BTC:",
+              state["btc"],
+          )
+
+          print(
+              "Closed trades:",
+              len(state["trades"]),
           )
           PY
 
