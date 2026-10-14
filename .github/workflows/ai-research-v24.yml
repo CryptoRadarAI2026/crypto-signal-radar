@@ -10,7 +10,7 @@ jobs:
   diagnostics:
     name: V24 Market Data Diagnostics
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -21,6 +21,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scikit-learn
+
       - name: Create report directory
         run: |
           mkdir -p reports/v24
@@ -28,69 +33,40 @@ jobs:
       - name: Download public market data
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+
           python ai-research/train_public_data.py \
             --days 90 \
             2>&1 | tee reports/v24/data_pipeline.log
 
-      - name: Locate OHLCV CSV files
+      - name: Validate downloaded market data
         shell: bash
         run: |
-          find . -type f -name "*.csv" \
-            -not -path "./.git/*" \
-            > reports/v24/csv_files.txt
+          set -euo pipefail
 
-          echo "CSV files found:"
-          cat reports/v24/csv_files.txt
+          for pair in BTCUSD ETHUSD SOLUSD; do
+            input="data/raw/COINBASE_${pair}_1.csv"
+            output="reports/v24/diagnostics_${pair}.json"
 
-      - name: Run V24 diagnostics
-        shell: bash
-        run: |
-          python - <<'PY'
-          import subprocess
-          from pathlib import Path
+            if [ ! -s "$input" ]; then
+              echo "ERROR: Missing or empty file: $input"
+              exit 1
+            fi
 
-          csv_list = Path("reports/v24/csv_files.txt")
+            echo "Validating $pair"
 
-          files = [
-              line.strip()
-              for line in csv_list.read_text().splitlines()
-              if line.strip()
-          ]
-
-          if not files:
-              raise SystemExit(
-                  "No CSV files found for V24 diagnostics"
-              )
-
-          print(f"Found {len(files)} CSV files")
-
-          for index, file in enumerate(files):
-              output = (
-                  f"reports/v24/diagnostics_{index}.json"
-              )
-
-              print(f"Checking: {file}")
-
-              subprocess.run(
-                  [
-                      "python",
-                      "ai-research/v24/diagnose.py",
-                      "--input",
-                      file,
-                      "--output",
-                      output,
-                  ],
-                  check=True,
-              )
-
-          print("V24 diagnostics completed")
-          PY
+            python ai-research/v24/diagnose.py \
+              --input "$input" \
+              --output "$output"
+          done
 
       - name: Upload V24 reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v24-diagnostics-reports
-          path: reports/v24/
+          path: |
+            reports/v24/
+            reports/real_data_training.json
+            reports/source_manifest.json
           retention-days: 30
