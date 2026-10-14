@@ -1,0 +1,29 @@
+name: AI Research V21 - Guarded Data Architecture
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v21:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run V21 synthetic integrity suite only
+        run: python ai-research/v21/research_v21.py
+      - name: Upload V21 integrity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v21-integrity
+          path: reports/v21/integrity.json
+          if-no-files-found: warn
+          retention-days: 30
