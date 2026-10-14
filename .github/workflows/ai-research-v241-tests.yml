@@ -1,0 +1,40 @@
+name: AI Research V24.1 - Audit Unit Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ai-research/v24/ai-research/v24/audit.py'
+      - 'ai-research/v24/ai-research/v24/test_audit.py'
+      - '.github/workflows/ai-research-v241-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: V24.1 Audit Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify audit files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ai-research/v24/ai-research/v24/audit.py
+          test -s ai-research/v24/ai-research/v24/test_audit.py
+
+      - name: Run audit unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ai-research/v24/ai-research/v24
+          python -m unittest discover -s . -p 'test_audit.py' -v
