@@ -20,12 +20,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Verify validation script
         shell: bash
         run: |
           set -euo pipefail
+
           test -s ai-research/v243/validate.py
           python -m py_compile ai-research/v243/validate.py
 
@@ -33,12 +34,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
           mkdir -p reports/v243
 
           RUN_ID="$(
             gh run list \
+              --repo "$GH_REPO" \
               --workflow ai-research-v242-data-audit.yml \
               --branch main \
               --status success \
@@ -48,23 +52,38 @@ jobs:
           )"
 
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "ERROR: No successful V24.2 run found"
+            echo "ERROR: No successful V24.2 run found."
             exit 1
           fi
 
           echo "Using V24.2 run: $RUN_ID"
 
           gh run download "$RUN_ID" \
+            --repo "$GH_REPO" \
             --name v242-real-data-audit-reports \
-            --dir .
+            --dir reports
 
-          test -s reports/real_data_training.json
-          test -s reports/v242/real_data_audit.json
+          echo "Checking downloaded reports..."
+
+          if [ ! -s reports/real_data_training.json ]; then
+            echo "ERROR: Missing reports/real_data_training.json"
+            find reports -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          if [ ! -s reports/v242/real_data_audit.json ]; then
+            echo "ERROR: Missing reports/v242/real_data_audit.json"
+            find reports -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          echo "V24.2 reports downloaded successfully."
 
       - name: Validate research model
         shell: bash
         run: |
           set -euo pipefail
+
           python ai-research/v243/validate.py \
             --training reports/real_data_training.json \
             --audit reports/v242/real_data_audit.json \
