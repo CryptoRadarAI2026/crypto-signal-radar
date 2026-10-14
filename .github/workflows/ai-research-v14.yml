@@ -7,7 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  v14-economic-diagnostics:
+  economic-diagnostics:
+    name: Validation economic diagnostics only
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -20,15 +21,37 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install research dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pandas scikit-learn requests
+          python -m pip install numpy scikit-learn
 
-      - name: Download historical Coinbase data
+      - name: Download public historical candles
         run: |
-          python ai-research/v11/download_coinbase_90d.py \
-            --output-dir data/raw
+          mkdir -p data/raw
+
+          python - <<'PY'
+          import sys
+          import time
+          from pathlib import Path
+
+          sys.path.insert(0, "ai-research")
+
+          from train_public_data import download
+          from v11.research_v11 import PAIRS
+
+          days = 90
+          end = int(time.time()) // 86400 * 86400
+          start = end - days * 86400
+
+          for pair in PAIRS:
+              path = Path("data/raw") / (
+                  f"COINBASE_{pair.replace('-', '')}_{days}D_1M.csv"
+              )
+
+              meta = download(pair, start, end, path)
+              print(pair, meta, flush=True)
+          PY
 
       - name: Run V14 economic diagnostics
         run: |
