@@ -1,32 +1,20 @@
 """
 V24.5 - BTC Research Backtest Engine
+Corrected historical simulation engine.
 
-BTC-only historical research simulator.
+RESEARCH ONLY.
+NO EXCHANGE CONNECTION.
+NO REAL ORDERS.
+NO LIVE TRADING.
+NO TRADING APPROVAL.
 
-STRICT SAFETY:
-- NO exchange connection
-- NO real orders
-- NO live trading
-- NO trading approval
-- NO automatic signal generation
-
-Features:
-- One-minute OHLC candles
-- Historical LONG / SHORT simulation
-- Multiple hypothetical positions
-- Stop loss and take profit
-- Maximum holding time
-- Fees and slippage
-- Conservative intrabar handling
-- Portfolio risk limits
-- Daily loss lock
-- Research-only reporting
-
-IMPORTANT:
-Signals must be generated without future-data leakage.
-This module does not generate signals.
-
-All entries and exits are hypothetical.
+Important limitations:
+- Historical BTC-USD spot candles are used as a proxy.
+- Futures liquidation is NOT modeled.
+- Funding is NOT modeled.
+- Intrabar price sequence is unknown.
+- Signals must be computed without future leakage.
+- No model profitability or execution approval is implied.
 """
 
 import csv
@@ -38,7 +26,6 @@ from pathlib import Path
 
 
 VERSION = "V24.5"
-
 STATUS = "RESEARCH_ONLY_NOT_APPROVED"
 
 CONFIG_PATH = Path(__file__).with_name(
@@ -46,7 +33,7 @@ CONFIG_PATH = Path(__file__).with_name(
 )
 
 
-def valid_number(value):
+def is_number(value):
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
@@ -54,21 +41,44 @@ def valid_number(value):
     )
 
 
-def positive(name, value):
-    if not valid_number(value) or value <= 0:
+def require_number(name, value, minimum=None):
+    if not is_number(value):
         raise ValueError(
-            f"{name} must be positive and finite"
+            f"{name} must be a finite number"
+        )
+
+    if minimum is not None and value < minimum:
+        raise ValueError(
+            f"{name} must be >= {minimum}"
         )
 
 
-def nonnegative(name, value):
-    if not valid_number(value) or value < 0:
+def require_positive(name, value):
+    require_number(name, value)
+
+    if value <= 0:
         raise ValueError(
-            f"{name} must be nonnegative and finite"
+            f"{name} must be positive"
         )
 
 
-def integer_at_least(name, value, minimum):
+def require_fraction(name, value, allow_zero=False):
+    require_number(name, value)
+
+    lower = 0 if allow_zero else 0
+
+    if allow_zero:
+        valid = lower <= value <= 1
+    else:
+        valid = lower < value <= 1
+
+    if not valid:
+        raise ValueError(
+            f"{name} must be between 0 and 1"
+        )
+
+
+def require_integer(name, value, minimum=0):
     if (
         not isinstance(value, int)
         or isinstance(value, bool)
@@ -77,6 +87,163 @@ def integer_at_least(name, value, minimum):
         raise ValueError(
             f"{name} must be an integer >= {minimum}"
         )
+
+
+def required_section(config, name):
+    section = config.get(name)
+
+    if not isinstance(section, dict):
+        raise ValueError(
+            f"Missing or invalid section: {name}"
+        )
+
+    return section
+
+
+def required_value(section, key):
+    if key not in section:
+        raise ValueError(
+            f"Missing required setting: {key}"
+        )
+
+    return section[key]
+
+
+def verify_safety(config):
+    if not isinstance(config, dict):
+        raise ValueError(
+            "Configuration must be an object"
+        )
+
+    if config.get("status") != STATUS:
+        raise ValueError(
+            "Research status lock failed"
+        )
+
+    safety = required_section(
+        config,
+        "safety"
+    )
+
+    required_safety = {
+        "research_only": True,
+        "trading_enabled": False,
+        "live_orders_enabled": False,
+        "exchange_order_access": False,
+        "model_approved": False,
+        "allow_real_capital": False,
+    }
+
+    for key, expected in required_safety.items():
+        if safety.get(key) is not expected:
+            raise ValueError(
+                f"Research safety lock failed: {key}"
+            )
+
+    approval = required_section(
+        config,
+        "approval"
+    )
+
+    required_approval = {
+        "automatic_approval": False,
+        "trading_approval": False,
+        "execution_ready": False,
+    }
+
+    for key, expected in required_approval.items():
+        if approval.get(key) is not expected:
+            raise ValueError(
+                f"Approval lock failed: {key}"
+            )
+
+    market = required_section(
+        config,
+        "market"
+    )
+
+    if market.get("symbol") != "BTC":
+        raise ValueError(
+            "Only BTC is supported"
+        )
+
+    if market.get("reference_pair") != "BTC-USD":
+        raise ValueError(
+            "Expected BTC-USD reference data"
+        )
+
+    if market.get("candle_interval_minutes") != 1:
+        raise ValueError(
+            "Only one-minute candles are supported"
+        )
+
+    execution = required_section(
+        config,
+        "execution_assumptions"
+    )
+
+    if execution.get("mode") != (
+        "historical_simulation_only"
+    ):
+        raise ValueError(
+            "Historical simulation lock failed"
+        )
+
+    if execution.get(
+        "signal_at_completed_candle"
+    ) is not True:
+        raise ValueError(
+            "Signals must use completed candles"
+        )
+
+    if execution.get("earliest_entry") != (
+        "next_candle_open"
+    ):
+        raise ValueError(
+            "Only next-candle-open entry is supported"
+        )
+
+    if execution.get(
+        "same_candle_stop_and_target_policy"
+    ) != "stop_first":
+        raise ValueError(
+            "Only stop-first ambiguity policy supported"
+        )
+
+    if execution.get(
+        "gap_through_stop_policy"
+    ) != "adverse_open_with_slippage":
+        raise ValueError(
+            "Unsupported stop gap policy"
+        )
+
+    if execution.get(
+        "allow_execution_ready_claim"
+    ) is not False:
+        raise ValueError(
+            "Execution-ready claims must be disabled"
+        )
+
+    risk = required_section(
+        config,
+        "risk_management"
+    )
+
+    if risk.get(
+        "allow_widening_protective_stop"
+    ) is not False:
+        raise ValueError(
+            "Stop widening must remain disabled"
+        )
+
+    if risk.get(
+        "emergency_stop_enabled"
+    ) is not True:
+        raise ValueError(
+            "Emergency risk lock must remain enabled"
+        )
+
+    return True
 
 
 def load_config(path=CONFIG_PATH):
@@ -92,41 +259,6 @@ def load_config(path=CONFIG_PATH):
     return config
 
 
-def verify_safety(config):
-    if not isinstance(config, dict):
-        raise ValueError("Invalid configuration")
-
-    if config.get("status") != STATUS:
-        raise ValueError(
-            "Research status lock failed"
-        )
-
-    safety = config.get("safety", {})
-
-    required = {
-        "research_only": True,
-        "trading_enabled": False,
-        "live_orders_enabled": False,
-        "exchange_order_access": False,
-        "model_approved": False,
-    }
-
-    for key, expected in required.items():
-        if safety.get(key) is not expected:
-            raise ValueError(
-                f"Safety lock failed: {key}"
-            )
-
-    market = config.get("market", {})
-
-    if market.get("symbol") != "BTC":
-        raise ValueError(
-            "V24.5 supports BTC only"
-        )
-
-    return True
-
-
 @dataclass(frozen=True)
 class Candle:
     timestamp: int
@@ -137,10 +269,9 @@ class Candle:
     volume: float
 
     def __post_init__(self):
-        integer_at_least(
+        require_integer(
             "timestamp",
-            self.timestamp,
-            0
+            self.timestamp
         )
 
         for name in (
@@ -149,14 +280,15 @@ class Candle:
             "low",
             "close"
         ):
-            positive(
+            require_positive(
                 name,
                 getattr(self, name)
             )
 
-        nonnegative(
+        require_number(
             "volume",
-            self.volume
+            self.volume,
+            minimum=0
         )
 
         if self.high < max(
@@ -188,45 +320,40 @@ class ResearchSignal:
     risk_fraction: float
 
     def __post_init__(self):
-        integer_at_least(
+        require_integer(
             "signal timestamp",
-            self.timestamp,
-            0
+            self.timestamp
         )
 
         if self.direction not in (
             "LONG",
-            "SHORT"
+            "SHORT",
+            "WAIT"
         ):
             raise ValueError(
-                "Direction must be LONG or SHORT"
+                "Invalid signal direction"
             )
 
-        positive(
+        require_fraction(
             "stop_loss_pct",
             self.stop_loss_pct
         )
 
-        positive(
+        require_fraction(
             "take_profit_pct",
             self.take_profit_pct
         )
 
-        integer_at_least(
+        require_integer(
             "max_holding_minutes",
             self.max_holding_minutes,
-            1
+            minimum=1
         )
 
-        positive(
+        require_fraction(
             "risk_fraction",
             self.risk_fraction
         )
-
-        if self.risk_fraction > 1:
-            raise ValueError(
-                "risk_fraction cannot exceed 1"
-            )
 
 
 @dataclass
@@ -239,9 +366,8 @@ class SimulatedPosition:
     stop_price: float
     target_price: float
     expiry_timestamp: int
-    entry_fee: float
-    entry_notional: float
-    planned_risk: float
+    entry_fee_usdt: float
+    planned_risk_usdt: float
 
 
 class BTCBacktestEngine:
@@ -251,160 +377,202 @@ class BTCBacktestEngine:
 
         self.config = config
 
-        portfolio = config.get(
-            "portfolio",
-            {}
+        portfolio = required_section(
+            config,
+            "portfolio"
         )
 
-        risk = config.get(
-            "risk_management",
-            {}
+        risk = required_section(
+            config,
+            "risk_management"
         )
 
-        execution = config.get(
-            "backtest",
-            {}
+        execution = required_section(
+            config,
+            "execution_assumptions"
         )
 
-        self.initial_capital = float(
-            portfolio.get(
-                "initial_capital_usdt",
-                1000.0
-            )
+        management = required_section(
+            config,
+            "position_management"
         )
 
-        positive(
+        self.initial_capital = required_value(
+            portfolio,
+            "initial_capital_usdt"
+        )
+
+        self.reserve_fraction = required_value(
+            portfolio,
+            "reserve_capital_fraction"
+        )
+
+        self.risk_per_position = required_value(
+            risk,
+            "risk_per_position_fraction"
+        )
+
+        self.max_total_risk = required_value(
+            risk,
+            "max_total_planned_risk_fraction"
+        )
+
+        self.max_daily_loss = required_value(
+            risk,
+            "max_daily_loss_fraction"
+        )
+
+        self.max_gross_ratio = required_value(
+            risk,
+            "max_gross_notional_to_equity"
+        )
+
+        self.max_leverage = required_value(
+            risk,
+            "maximum_simulated_leverage"
+        )
+
+        self.fee_rate = required_value(
+            execution,
+            "market_order_fee_fraction_per_side"
+        )
+
+        self.slippage_rate = required_value(
+            execution,
+            "base_slippage_fraction_per_side"
+        )
+
+        self.stress_slippage_rate = required_value(
+            execution,
+            "stress_slippage_fraction_per_side"
+        )
+
+        self.max_holding_minutes = required_value(
+            management,
+            "maximum_holding_minutes"
+        )
+
+        self.position_count_limit = portfolio.get(
+            "fixed_position_count_limit"
+        )
+
+        require_positive(
             "initial_capital",
             self.initial_capital
         )
 
-        self.max_positions = risk.get(
-            "maximum_simultaneous_positions",
-            3
+        require_fraction(
+            "reserve_capital_fraction",
+            self.reserve_fraction,
+            allow_zero=True
         )
 
-        integer_at_least(
-            "maximum_simultaneous_positions",
-            self.max_positions,
-            1
-        )
-
-        self.max_risk_fraction = float(
-            risk.get(
-                "max_total_planned_risk_fraction",
-                0.03
+        if self.reserve_fraction >= 1:
+            raise ValueError(
+                "Reserve must leave usable capital"
             )
-        )
-
-        self.max_gross_ratio = float(
-            risk.get(
-                "max_gross_notional_to_equity",
-                1.0
-            )
-        )
-
-        self.daily_loss_fraction = float(
-            risk.get(
-                "maximum_daily_loss_fraction",
-                0.03
-            )
-        )
-
-        self.fee_rate = float(
-            execution.get(
-                "fee_rate_per_side",
-                0.001
-            )
-        )
-
-        self.slippage_rate = float(
-            execution.get(
-                "slippage_rate_per_side",
-                0.0005
-            )
-        )
-
-        self.minimum_equity = float(
-            execution.get(
-                "minimum_equity_usdt",
-                1.0
-            )
-        )
 
         for name, value in (
             (
-                "max_risk_fraction",
-                self.max_risk_fraction
+                "risk_per_position_fraction",
+                self.risk_per_position
             ),
             (
-                "max_gross_ratio",
-                self.max_gross_ratio
+                "max_total_planned_risk_fraction",
+                self.max_total_risk
             ),
             (
-                "daily_loss_fraction",
-                self.daily_loss_fraction
-            ),
-            (
-                "minimum_equity",
-                self.minimum_equity
+                "max_daily_loss_fraction",
+                self.max_daily_loss
             )
         ):
-            positive(name, value)
+            require_fraction(name, value)
 
-        if self.max_risk_fraction > 1:
-            raise ValueError(
-                "Portfolio risk fraction exceeds 1"
-            )
-
-        if self.daily_loss_fraction > 1:
-            raise ValueError(
-                "Daily loss fraction exceeds 1"
-            )
-
-        nonnegative(
-            "fee_rate",
-            self.fee_rate
+        require_positive(
+            "max_gross_notional_to_equity",
+            self.max_gross_ratio
         )
 
-        nonnegative(
-            "slippage_rate",
-            self.slippage_rate
+        require_positive(
+            "maximum_simulated_leverage",
+            self.max_leverage
         )
 
-        if self.fee_rate >= 1:
-            raise ValueError(
-                "Invalid fee rate"
+        for name, value in (
+            ("fee_rate", self.fee_rate),
+            ("slippage_rate", self.slippage_rate),
+            (
+                "stress_slippage_rate",
+                self.stress_slippage_rate
+            )
+        ):
+            require_fraction(
+                name,
+                value,
+                allow_zero=True
             )
 
-        if self.slippage_rate >= 1:
+            if value >= 1:
+                raise ValueError(
+                    f"{name} must be below 1"
+                )
+
+        if (
+            self.stress_slippage_rate
+            < self.slippage_rate
+        ):
             raise ValueError(
-                "Invalid slippage rate"
+                "Stress slippage cannot be lower "
+                "than base slippage"
+            )
+
+        require_integer(
+            "maximum_holding_minutes",
+            self.max_holding_minutes,
+            minimum=1
+        )
+
+        if self.position_count_limit is not None:
+            require_integer(
+                "fixed_position_count_limit",
+                self.position_count_limit,
+                minimum=1
+            )
+
+        if (
+            self.risk_per_position
+            > self.max_total_risk
+        ):
+            raise ValueError(
+                "Per-position risk exceeds total risk"
             )
 
         self.reset()
 
     def reset(self):
-        self.cash_equity = (
+        self.cash_equity = float(
             self.initial_capital
         )
 
         self.positions = []
-
-        self.closed_trades = []
-
+        self.trades = []
         self.equity_curve = []
 
         self.next_position_id = 1
 
-        self.rejected_signals = 0
-
         self.accepted_signals = 0
+        self.rejected_signals = 0
+        self.wait_signals = 0
 
-        self.daily_start_equity = {}
+        self.rejection_reasons = {}
 
         self.locked_days = set()
+        self.daily_start_equity = {}
 
-        self.last_timestamp = None
+        self.total_entry_fees = 0.0
+        self.total_exit_fees = 0.0
+
+        self.max_open_positions = 0
 
     @staticmethod
     def day_key(timestamp):
@@ -413,30 +581,36 @@ class BTCBacktestEngine:
             tz=timezone.utc
         ).strftime("%Y-%m-%d")
 
-    def current_equity(self, price):
-        positive("price", price)
+    def reject(self, reason):
+        self.rejected_signals += 1
 
-        unrealized = 0.0
+        self.rejection_reasons[reason] = (
+            self.rejection_reasons.get(
+                reason,
+                0
+            ) + 1
+        )
 
-        for position in self.positions:
-            sign = (
-                1
-                if position.direction == "LONG"
-                else -1
-            )
-
-            unrealized += (
-                sign
-                * (
-                    price
-                    - position.entry_price
-                )
-                * position.quantity_btc
-            )
+    def position_pnl(self, position, price):
+        sign = (
+            1
+            if position.direction == "LONG"
+            else -1
+        )
 
         return (
+            sign
+            * (price - position.entry_price)
+            * position.quantity_btc
+        )
+
+    def equity(self, price):
+        return (
             self.cash_equity
-            + unrealized
+            + sum(
+                self.position_pnl(p, price)
+                for p in self.positions
+            )
         )
 
     def gross_notional(self, price):
@@ -445,229 +619,81 @@ class BTCBacktestEngine:
             for p in self.positions
         )
 
-    def total_planned_risk(self):
+    def planned_risk(self):
         return sum(
-            p.planned_risk
+            p.planned_risk_usdt
             for p in self.positions
         )
 
-    def apply_slippage(
-        self,
-        price,
-        direction,
-        entering
-    ):
-        positive("price", price)
+    def estimated_margin(self, price):
+        # Simplified margin proxy only.
+        # NOT an exchange margin model.
 
+        return (
+            self.gross_notional(price)
+            / self.max_leverage
+        )
+
+    def entry_fill(self, price, direction):
         if direction == "LONG":
-            sign = (
-                1 if entering else -1
-            )
-        else:
-            sign = (
-                -1 if entering else 1
+            return price * (
+                1 + self.slippage_rate
             )
 
         return price * (
-            1 + sign * self.slippage_rate
+            1 - self.slippage_rate
         )
 
-    def exit_position(
+    def exit_fill(
         self,
-        position,
-        timestamp,
-        raw_exit_price,
-        reason
+        price,
+        direction,
+        stress=False
     ):
-        exit_price = self.apply_slippage(
-            raw_exit_price,
-            position.direction,
-            entering=False
+        slip = (
+            self.stress_slippage_rate
+            if stress
+            else self.slippage_rate
         )
 
-        sign = (
-            1
-            if position.direction == "LONG"
-            else -1
-        )
+        if direction == "LONG":
+            return price * (1 - slip)
 
-        gross_pnl = (
-            sign
-            * (
-                exit_price
-                - position.entry_price
-            )
-            * position.quantity_btc
-        )
+        return price * (1 + slip)
 
-        exit_notional = (
-            exit_price
-            * position.quantity_btc
-        )
-
-        exit_fee = (
-            exit_notional
-            * self.fee_rate
-        )
-
-        self.cash_equity += (
-            gross_pnl
-            - exit_fee
-        )
-
-        net_pnl = (
-            gross_pnl
-            - position.entry_fee
-            - exit_fee
-        )
-
-        trade = {
-            "position_id":
-                position.position_id,
-            "direction":
-                position.direction,
-            "entry_timestamp":
-                position.entry_timestamp,
-            "exit_timestamp":
-                timestamp,
-            "entry_price":
-                round(
-                    position.entry_price,
-                    8
-                ),
-            "exit_price":
-                round(exit_price, 8),
-            "quantity_btc":
-                position.quantity_btc,
-            "gross_pnl_usdt":
-                round(gross_pnl, 6),
-            "entry_fee_usdt":
-                round(
-                    position.entry_fee,
-                    6
-                ),
-            "exit_fee_usdt":
-                round(exit_fee, 6),
-            "net_pnl_usdt":
-                round(net_pnl, 6),
-            "exit_reason":
-                reason,
-            "research_only": True,
-        }
-
-        self.closed_trades.append(
-            trade
-        )
-
-        self.positions.remove(
-            position
-        )
-
-    def check_exits(self, candle):
-        for position in list(
-            self.positions
-        ):
-            stop_hit = False
-            target_hit = False
-
-            if position.direction == "LONG":
-                stop_hit = (
-                    candle.low
-                    <= position.stop_price
-                )
-
-                target_hit = (
-                    candle.high
-                    >= position.target_price
-                )
-
-            else:
-                stop_hit = (
-                    candle.high
-                    >= position.stop_price
-                )
-
-                target_hit = (
-                    candle.low
-                    <= position.target_price
-                )
-
-            # Conservative handling:
-            # If both stop and target are touched
-            # in the same minute, assume STOP first.
-
-            if stop_hit:
-                self.exit_position(
-                    position,
-                    candle.timestamp,
-                    position.stop_price,
-                    "STOP_LOSS"
-                )
-
-            elif target_hit:
-                self.exit_position(
-                    position,
-                    candle.timestamp,
-                    position.target_price,
-                    "TAKE_PROFIT"
-                )
-
-            elif (
-                candle.timestamp
-                >= position.expiry_timestamp
-            ):
-                self.exit_position(
-                    position,
-                    candle.timestamp,
-                    candle.close,
-                    "TIME_EXIT"
-                )
-
-    def daily_risk_check(
-        self,
-        candle
-    ):
+    def start_day(self, candle):
         day = self.day_key(
             candle.timestamp
         )
 
-        equity = self.current_equity(
-            candle.close
-        )
-
-        if day not in (
-            self.daily_start_equity
-        ):
-            self.daily_start_equity[
-                day
-            ] = equity
-
-        starting_equity = (
-            self.daily_start_equity[
-                day
-            ]
-        )
-
-        limit = (
-            starting_equity
-            * self.daily_loss_fraction
-        )
-
-        loss = (
-            starting_equity
-            - equity
-        )
-
-        if loss >= limit:
-            self.locked_days.add(
-                day
+        if day not in self.daily_start_equity:
+            self.daily_start_equity[day] = (
+                self.equity(candle.open)
             )
 
-        return (
-            day in self.locked_days
+        return day
+
+    def update_daily_lock(self, timestamp, price):
+        day = self.day_key(timestamp)
+
+        starting = self.daily_start_equity.get(
+            day
         )
 
-    def try_open_position(
+        if starting is None:
+            return False
+
+        current = self.equity(price)
+
+        if current <= (
+            starting
+            * (1 - self.max_daily_loss)
+        ):
+            self.locked_days.add(day)
+
+        return day in self.locked_days
+
+    def open_hypothetical_position(
         self,
         signal,
         candle
@@ -676,109 +702,105 @@ class BTCBacktestEngine:
             candle.timestamp
         )
 
+        if signal.direction == "WAIT":
+            self.wait_signals += 1
+            return
+
         if day in self.locked_days:
-            self.rejected_signals += 1
+            self.reject("DAILY_LOSS_LOCK")
             return
 
-        if len(
-            self.positions
-        ) >= self.max_positions:
-            self.rejected_signals += 1
-            return
-
-        equity = self.current_equity(
-            candle.close
-        )
-
-        if equity <= (
-            self.minimum_equity
+        if (
+            self.position_count_limit is not None
+            and len(self.positions)
+            >= self.position_count_limit
         ):
-            self.rejected_signals += 1
+            self.reject("POSITION_COUNT_LIMIT")
             return
 
-        # Signal is considered available
-        # at the close of this candle.
-        #
-        # Entry happens at NEXT candle open.
-        # The caller must provide that candle.
-
-        raise RuntimeError(
-            "Use enter_at_next_open()"
-        )
-
-    def enter_at_next_open(
-        self,
-        signal,
-        candle
-    ):
-        day = self.day_key(
-            candle.timestamp
-        )
-
-        if day in self.locked_days:
-            self.rejected_signals += 1
+        if (
+            signal.max_holding_minutes
+            > self.max_holding_minutes
+        ):
+            self.reject("HOLDING_TIME_LIMIT")
             return
 
-        if len(
-            self.positions
-        ) >= self.max_positions:
-            self.rejected_signals += 1
+        if (
+            signal.risk_fraction
+            > self.risk_per_position
+        ):
+            self.reject("PER_POSITION_RISK_LIMIT")
             return
 
-        equity = self.current_equity(
+        equity = self.equity(
             candle.open
         )
 
-        if equity <= (
-            self.minimum_equity
-        ):
-            self.rejected_signals += 1
+        if equity <= 0:
+            self.reject("NONPOSITIVE_EQUITY")
             return
 
-        entry_price = (
-            self.apply_slippage(
-                candle.open,
-                signal.direction,
-                entering=True
-            )
+        entry = self.entry_fill(
+            candle.open,
+            signal.direction
         )
 
+        if entry <= 0:
+            self.reject("INVALID_ENTRY_PRICE")
+            return
+
         if signal.direction == "LONG":
-            stop_price = (
-                entry_price
-                * (
-                    1
-                    - signal.stop_loss_pct
-                )
+            stop = entry * (
+                1 - signal.stop_loss_pct
             )
 
-            target_price = (
-                entry_price
-                * (
-                    1
-                    + signal.take_profit_pct
-                )
+            target = entry * (
+                1 + signal.take_profit_pct
             )
 
         else:
-            stop_price = (
-                entry_price
-                * (
-                    1
-                    + signal.stop_loss_pct
-                )
+            stop = entry * (
+                1 + signal.stop_loss_pct
             )
 
-            target_price = (
-                entry_price
-                * (
-                    1
-                    - signal.take_profit_pct
-                )
+            target = entry * (
+                1 - signal.take_profit_pct
             )
 
-        if target_price <= 0:
-            self.rejected_signals += 1
+        if stop <= 0 or target <= 0:
+            self.reject("INVALID_STOP_OR_TARGET")
+            return
+
+        # Risk sizing includes:
+        # - stop distance
+        # - estimated entry fee
+        # - estimated exit fee
+        # - adverse stop slippage stress
+        #
+        # This is still NOT a guaranteed loss cap.
+
+        stressed_exit = self.exit_fill(
+            stop,
+            signal.direction,
+            stress=True
+        )
+
+        loss_per_btc = abs(
+            entry - stressed_exit
+        )
+
+        fee_per_btc = (
+            entry * self.fee_rate
+            + stressed_exit * self.fee_rate
+        )
+
+        estimated_risk_per_btc = (
+            loss_per_btc
+            + fee_per_btc
+        )
+
+        if estimated_risk_per_btc <= 0:
+            self.reject("INVALID_RISK_ESTIMATE")
             return
 
         risk_budget = (
@@ -786,166 +808,313 @@ class BTCBacktestEngine:
             * signal.risk_fraction
         )
 
-        stop_distance = abs(
-            entry_price
-            - stop_price
-        )
-
-        estimated_cost_per_btc = (
-            entry_price
-            * (
-                2 * self.fee_rate
-                + 2 * self.slippage_rate
-            )
-        )
-
-        risk_per_btc = (
-            stop_distance
-            + estimated_cost_per_btc
-        )
-
-        if risk_per_btc <= 0:
-            self.rejected_signals += 1
-            return
-
         quantity = (
             risk_budget
-            / risk_per_btc
+            / estimated_risk_per_btc
+        )
+
+        if quantity <= 0:
+            self.reject("INVALID_QUANTITY")
+            return
+
+        entry_notional = (
+            entry * quantity
         )
 
         planned_risk = (
             quantity
-            * risk_per_btc
-        )
-
-        existing_risk = (
-            self.total_planned_risk()
-        )
-
-        portfolio_risk_limit = (
-            equity
-            * self.max_risk_fraction
+            * estimated_risk_per_btc
         )
 
         if (
-            existing_risk
+            self.planned_risk()
             + planned_risk
-            > portfolio_risk_limit
+            > equity * self.max_total_risk
             + 1e-9
         ):
-            self.rejected_signals += 1
+            self.reject("TOTAL_RISK_LIMIT")
             return
 
-        existing_gross = (
-            self.gross_notional(
-                candle.open
-            )
-        )
-
-        new_gross = (
-            existing_gross
-            + entry_price
-            * quantity
-        )
-
-        gross_limit = (
-            equity
-            * self.max_gross_ratio
-        )
-
-        if new_gross > (
-            gross_limit + 1e-9
+        if (
+            self.gross_notional(candle.open)
+            + entry_notional
+            > equity * self.max_gross_ratio
+            + 1e-9
         ):
-            self.rejected_signals += 1
+            self.reject("GROSS_NOTIONAL_LIMIT")
             return
 
-        entry_notional = (
-            entry_price
-            * quantity
+        # Simplified capital-reserve constraint.
+        # Uses configured maximum leverage only
+        # as a research margin approximation.
+
+        projected_margin = (
+            self.estimated_margin(candle.open)
+            + entry_notional / self.max_leverage
         )
 
         entry_fee = (
-            entry_notional
-            * self.fee_rate
+            entry_notional * self.fee_rate
         )
+
+        usable_capital = (
+            equity
+            * (1 - self.reserve_fraction)
+        )
+
+        if (
+            projected_margin + entry_fee
+            > usable_capital + 1e-9
+        ):
+            self.reject("CAPITAL_RESERVE_LIMIT")
+            return
 
         position = SimulatedPosition(
-            position_id=(
-                self.next_position_id
-            ),
-            direction=(
-                signal.direction
-            ),
-            entry_timestamp=(
-                candle.timestamp
-            ),
-            entry_price=(
-                entry_price
-            ),
+            position_id=self.next_position_id,
+            direction=signal.direction,
+            entry_timestamp=candle.timestamp,
+            entry_price=entry,
             quantity_btc=quantity,
-            stop_price=stop_price,
-            target_price=target_price,
+            stop_price=stop,
+            target_price=target,
             expiry_timestamp=(
                 candle.timestamp
-                + (
-                    signal.max_holding_minutes
-                    * 60
-                )
+                + signal.max_holding_minutes * 60
             ),
-            entry_fee=entry_fee,
-            entry_notional=(
-                entry_notional
-            ),
-            planned_risk=(
-                planned_risk
-            ),
+            entry_fee_usdt=entry_fee,
+            planned_risk_usdt=planned_risk,
         )
 
-        self.cash_equity -= (
-            entry_fee
-        )
+        self.cash_equity -= entry_fee
 
-        self.positions.append(
-            position
-        )
+        self.total_entry_fees += entry_fee
+
+        self.positions.append(position)
 
         self.next_position_id += 1
 
         self.accepted_signals += 1
 
-    def run(
+        self.max_open_positions = max(
+            self.max_open_positions,
+            len(self.positions)
+        )
+
+    def close_hypothetical_position(
+        self,
+        position,
+        timestamp,
+        raw_price,
+        reason,
+        stress=False
+    ):
+        fill = self.exit_fill(
+            raw_price,
+            position.direction,
+            stress=stress
+        )
+
+        gross_pnl = (
+            self.position_pnl(
+                position,
+                fill
+            )
+        )
+
+        exit_fee = (
+            fill
+            * position.quantity_btc
+            * self.fee_rate
+        )
+
+        net_pnl = (
+            gross_pnl
+            - position.entry_fee_usdt
+            - exit_fee
+        )
+
+        self.cash_equity += (
+            gross_pnl - exit_fee
+        )
+
+        self.total_exit_fees += exit_fee
+
+        self.positions.remove(position)
+
+        self.trades.append({
+            "position_id": position.position_id,
+            "direction": position.direction,
+            "entry_timestamp":
+                position.entry_timestamp,
+            "exit_timestamp": timestamp,
+            "entry_price":
+                round(position.entry_price, 8),
+            "exit_price":
+                round(fill, 8),
+            "quantity_btc":
+                position.quantity_btc,
+            "stop_price":
+                round(position.stop_price, 8),
+            "target_price":
+                round(position.target_price, 8),
+            "gross_pnl_usdt":
+                round(gross_pnl, 6),
+            "entry_fee_usdt":
+                round(
+                    position.entry_fee_usdt,
+                    6
+                ),
+            "exit_fee_usdt":
+                round(exit_fee, 6),
+            "net_pnl_usdt":
+                round(net_pnl, 6),
+            "exit_reason": reason,
+            "stress_slippage_applied": stress,
+            "research_only": True,
+        })
+
+    def check_position_exit(
+        self,
+        position,
+        candle
+    ):
+        # First check opening-price gaps.
+        # An adverse gap beyond the stop
+        # exits at the worse opening price.
+
+        if position.direction == "LONG":
+            if candle.open <= position.stop_price:
+                self.close_hypothetical_position(
+                    position,
+                    candle.timestamp,
+                    candle.open,
+                    "STOP_GAP",
+                    stress=True
+                )
+                return
+
+            if candle.open >= position.target_price:
+                self.close_hypothetical_position(
+                    position,
+                    candle.timestamp,
+                    position.target_price,
+                    "TARGET_AT_OPEN"
+                )
+                return
+
+            stop_hit = (
+                candle.low <= position.stop_price
+            )
+
+            target_hit = (
+                candle.high >= position.target_price
+            )
+
+        else:
+            if candle.open >= position.stop_price:
+                self.close_hypothetical_position(
+                    position,
+                    candle.timestamp,
+                    candle.open,
+                    "STOP_GAP",
+                    stress=True
+                )
+                return
+
+            if candle.open <= position.target_price:
+                self.close_hypothetical_position(
+                    position,
+                    candle.timestamp,
+                    position.target_price,
+                    "TARGET_AT_OPEN"
+                )
+                return
+
+            stop_hit = (
+                candle.high >= position.stop_price
+            )
+
+            target_hit = (
+                candle.low <= position.target_price
+            )
+
+        # Unknown intrabar sequence:
+        # stop always takes priority.
+
+        if stop_hit:
+            reason = (
+                "STOP_FIRST_AMBIGUOUS"
+                if target_hit
+                else "STOP_LOSS"
+            )
+
+            self.close_hypothetical_position(
+                position,
+                candle.timestamp,
+                position.stop_price,
+                reason,
+                stress=True
+            )
+            return
+
+        if target_hit:
+            self.close_hypothetical_position(
+                position,
+                candle.timestamp,
+                position.target_price,
+                "TAKE_PROFIT"
+            )
+            return
+
+        # A time exit occurs at candle close,
+        # not at an unknown intrabar instant.
+
+        if (
+            candle.timestamp + 60
+            >= position.expiry_timestamp
+        ):
+            self.close_hypothetical_position(
+                position,
+                candle.timestamp + 60,
+                candle.close,
+                "TIME_EXIT"
+            )
+
+    def record_equity(
+        self,
+        timestamp,
+        price
+    ):
+        self.equity_curve.append({
+            "timestamp": timestamp,
+            "equity_usdt":
+                round(self.equity(price), 6),
+            "open_positions":
+                len(self.positions),
+        })
+
+    def validate_inputs(
         self,
         candles,
         signals
     ):
-        self.reset()
-
-        if not isinstance(
-            candles,
-            list
-        ):
+        if not isinstance(candles, list):
             raise ValueError(
-                "candles must be a list"
+                "Candles must be a list"
             )
 
-        if not isinstance(
-            signals,
-            list
-        ):
+        if not isinstance(signals, list):
             raise ValueError(
-                "signals must be a list"
+                "Signals must be a list"
             )
 
         if len(candles) < 2:
             raise ValueError(
-                "At least two candles required"
+                "At least two candles are required"
             )
 
         for candle in candles:
-            if not isinstance(
-                candle,
-                Candle
-            ):
+            if not isinstance(candle, Candle):
                 raise ValueError(
                     "Invalid candle object"
                 )
@@ -959,162 +1128,254 @@ class BTCBacktestEngine:
                     "Invalid signal object"
                 )
 
-        for i in range(
+        for index in range(
             1,
             len(candles)
         ):
-            if (
-                candles[i].timestamp
-                - candles[i - 1].timestamp
-                != 60
-            ):
+            difference = (
+                candles[index].timestamp
+                - candles[index - 1].timestamp
+            )
+
+            if difference != 60:
                 raise ValueError(
-                    "Candles must be contiguous "
-                    "one-minute data"
+                    "Candles must be chronological, "
+                    "unique and exactly one minute apart"
                 )
 
-        signal_map = {}
+        available_times = {
+            candle.timestamp
+            for candle in candles
+        }
+
+        seen_signals = set()
 
         for signal in signals:
-            signal_map.setdefault(
-                signal.timestamp,
-                []
-            ).append(signal)
-
-        # A signal timestamp means:
-        # signal becomes known after that
-        # candle has closed.
-        #
-        # The next candle is used for entry.
-
-        for index, candle in enumerate(
-            candles
-        ):
-            self.last_timestamp = (
-                candle.timestamp
-            )
-
-            # First process positions
-            # already open before this candle.
-
-            self.check_exits(
-                candle
-            )
-
-            self.daily_risk_check(
-                candle
-            )
-
-            if index > 0:
-                previous = candles[
-                    index - 1
-                ]
-
-                pending = signal_map.get(
-                    previous.timestamp,
-                    []
+            if signal.timestamp not in available_times:
+                raise ValueError(
+                    "Signal timestamp not found "
+                    "in candle data"
                 )
 
-                for signal in pending:
-                    self.enter_at_next_open(
+            if signal.timestamp in seen_signals:
+                raise ValueError(
+                    "Only one signal per candle "
+                    "is supported in V24.5"
+                )
+
+            seen_signals.add(
+                signal.timestamp
+            )
+
+    def run(self, candles, signals):
+        verify_safety(self.config)
+
+        self.validate_inputs(
+            candles,
+            signals
+        )
+
+        self.reset()
+
+        signal_map = {
+            signal.timestamp: signal
+            for signal in signals
+        }
+
+        # A signal at timestamp T is assumed
+        # to become available only AFTER
+        # candle T has completed.
+        #
+        # It may enter at the open of T+60.
+        #
+        # IMPORTANT:
+        # The engine cannot independently prove
+        # that external signals avoid lookahead.
+
+        for index, candle in enumerate(candles):
+            day = self.start_day(candle)
+
+            # Check daily risk using opening mark.
+            # No new entries once locked.
+
+            self.update_daily_lock(
+                candle.timestamp,
+                candle.open
+            )
+
+            # Handle opening gaps for positions
+            # that were already open.
+            #
+            # The complete candle exit check
+            # occurs after next-open entries.
+            #
+            # This ensures new positions are
+            # exposed to the entry candle.
+
+            for position in list(self.positions):
+                if position.direction == "LONG":
+                    gap_stop = (
+                        candle.open
+                        <= position.stop_price
+                    )
+
+                else:
+                    gap_stop = (
+                        candle.open
+                        >= position.stop_price
+                    )
+
+                if gap_stop:
+                    self.close_hypothetical_position(
+                        position,
+                        candle.timestamp,
+                        candle.open,
+                        "STOP_GAP",
+                        stress=True
+                    )
+
+            self.update_daily_lock(
+                candle.timestamp,
+                candle.open
+            )
+
+            # Enter signals from the PREVIOUS
+            # completed candle only.
+
+            if index > 0:
+                previous = candles[index - 1]
+
+                signal = signal_map.get(
+                    previous.timestamp
+                )
+
+                if signal is not None:
+                    self.open_hypothetical_position(
                         signal,
                         candle
                     )
 
-            equity = (
-                self.current_equity(
-                    candle.close
+            # All positions, including those
+            # entered at this candle's open,
+            # are now checked against this
+            # candle's high/low/close.
+
+            for position in list(self.positions):
+                self.check_position_exit(
+                    position,
+                    candle
                 )
+
+            # End-of-candle risk check.
+            # Lock blocks subsequent entries.
+            # It does NOT imply liquidation.
+
+            self.update_daily_lock(
+                candle.timestamp,
+                candle.close
             )
 
-            self.equity_curve.append({
-                "timestamp":
-                    candle.timestamp,
-                "equity_usdt":
-                    round(equity, 6),
-                "open_positions":
-                    len(self.positions),
-            })
+            self.record_equity(
+                candle.timestamp + 60,
+                candle.close
+            )
 
-        # Close remaining hypothetical
-        # positions at final candle close.
+        # A signal on the final candle has
+        # no next candle and cannot be filled.
+
+        final_signal = signal_map.get(
+            candles[-1].timestamp
+        )
+
+        if final_signal is not None:
+            if final_signal.direction == "WAIT":
+                self.wait_signals += 1
+            else:
+                self.reject(
+                    "NO_NEXT_CANDLE"
+                )
+
+        # Mark remaining positions out
+        # at the end of historical data.
 
         last = candles[-1]
 
-        for position in list(
-            self.positions
-        ):
-            self.exit_position(
+        for position in list(self.positions):
+            self.close_hypothetical_position(
                 position,
-                last.timestamp,
+                last.timestamp + 60,
                 last.close,
                 "END_OF_DATA"
             )
 
+        # Ensure the final equity point
+        # includes final exit fees/slippage.
+
+        self.record_equity(
+            last.timestamp + 60,
+            last.close
+        )
+
         return self.report()
 
     def report(self):
-        total_trades = len(
-            self.closed_trades
-        )
-
         wins = [
-            t
-            for t in self.closed_trades
-            if t["net_pnl_usdt"] > 0
+            trade
+            for trade in self.trades
+            if trade["net_pnl_usdt"] > 0
         ]
 
         losses = [
-            t
-            for t in self.closed_trades
-            if t["net_pnl_usdt"] < 0
+            trade
+            for trade in self.trades
+            if trade["net_pnl_usdt"] < 0
         ]
 
-        gross_profit = sum(
-            t["net_pnl_usdt"]
-            for t in wins
+        total_trades = len(
+            self.trades
         )
 
-        gross_loss = abs(
+        total_profit = sum(
+            trade["net_pnl_usdt"]
+            for trade in wins
+        )
+
+        total_loss = abs(
             sum(
-                t["net_pnl_usdt"]
-                for t in losses
+                trade["net_pnl_usdt"]
+                for trade in losses
             )
         )
 
         profit_factor = (
-            gross_profit / gross_loss
-            if gross_loss > 0
+            total_profit / total_loss
+            if total_loss > 0
             else None
         )
 
         win_rate = (
-            len(wins)
-            / total_trades
-            * 100
+            100 * len(wins) / total_trades
             if total_trades
             else 0.0
         )
 
-        peak = (
+        peak = float(
             self.initial_capital
         )
 
         max_drawdown = 0.0
 
-        for item in self.equity_curve:
-            equity = item[
-                "equity_usdt"
-            ]
+        for point in self.equity_curve:
+            value = point["equity_usdt"]
 
             peak = max(
                 peak,
-                equity
+                value
             )
 
             if peak > 0:
                 drawdown = (
-                    peak - equity
+                    peak - value
                 ) / peak
 
                 max_drawdown = max(
@@ -1131,76 +1392,153 @@ class BTCBacktestEngine:
             - self.initial_capital
         )
 
+        long_trades = [
+            trade
+            for trade in self.trades
+            if trade["direction"] == "LONG"
+        ]
+
+        short_trades = [
+            trade
+            for trade in self.trades
+            if trade["direction"] == "SHORT"
+        ]
+
         return {
             "version": VERSION,
             "status": STATUS,
             "symbol": "BTC",
+            "reference_pair": "BTC-USD",
+
             "research_only": True,
             "trading_enabled": False,
             "model_approved": False,
             "execution_ready": False,
+            "exchange_connected": False,
+
             "initial_capital_usdt":
-                round(
-                    self.initial_capital,
-                    2
-                ),
+                round(self.initial_capital, 2),
+
             "final_equity_usdt":
-                round(
-                    final_equity,
-                    2
-                ),
+                round(final_equity, 2),
+
             "net_pnl_usdt":
                 round(net_pnl, 2),
+
             "return_pct":
                 round(
-                    net_pnl
-                    / self.initial_capital
-                    * 100,
+                    100
+                    * net_pnl
+                    / self.initial_capital,
                     4
                 ),
+
             "closed_trades":
                 total_trades,
+
+            "long_trades":
+                len(long_trades),
+
+            "short_trades":
+                len(short_trades),
+
             "winning_trades":
                 len(wins),
+
             "losing_trades":
                 len(losses),
+
             "win_rate_pct":
                 round(win_rate, 2),
+
             "profit_factor":
                 (
-                    round(
-                        profit_factor,
-                        4
-                    )
+                    round(profit_factor, 4)
                     if profit_factor is not None
                     else None
                 ),
+
             "max_drawdown_pct":
                 round(
                     max_drawdown * 100,
                     4
                 ),
+
             "accepted_signals":
                 self.accepted_signals,
+
             "rejected_signals":
                 self.rejected_signals,
+
+            "wait_signals":
+                self.wait_signals,
+
+            "rejection_reasons":
+                self.rejection_reasons,
+
+            "max_open_positions":
+                self.max_open_positions,
+
             "locked_days":
-                sorted(
-                    self.locked_days
-                ),
-            "trades":
-                self.closed_trades,
-            "equity_curve":
-                self.equity_curve,
-            "limitations": [
-                "Historical simulation only",
-                "No real exchange execution",
-                "No liquidation modeling",
-                "No funding modeling",
-                "Intrabar stop assumed first",
-                "Signal quality not validated",
-                "No guarantee of profitability"
+                sorted(self.locked_days),
+
+            "total_entry_fees_usdt":
+                round(self.total_entry_fees, 6),
+
+            "total_exit_fees_usdt":
+                round(self.total_exit_fees, 6),
+
+            "fee_rate_per_side":
+                self.fee_rate,
+
+            "base_slippage_per_side":
+                self.slippage_rate,
+
+            "stress_slippage_per_side":
+                self.stress_slippage_rate,
+
+            "assumptions": {
+                "signal_timing":
+                    "completed_candle",
+                "entry_timing":
+                    "next_candle_open",
+                "intrabar_ambiguity":
+                    "stop_first",
+                "stop_gap":
+                    "adverse_open",
+                "daily_loss_lock":
+                    "blocks_new_entries_only",
+                "margin":
+                    "simplified_proxy",
+                "position_count":
+                    "risk_and_capital_constrained",
+            },
+
+            "not_implemented": [
+                "futures_liquidation",
+                "funding_payments",
+                "exchange_margin_rules",
+                "dynamic_trailing_stop",
+                "partial_profit_taking",
+                "ATR_based_stop_generation",
+                "automatic_signal_generation",
+                "walk_forward_validation",
+                "market_regime_analysis",
+                "hedge_vs_net_comparison",
             ],
+
+            "warnings": [
+                "Spot candles are not futures fills.",
+                "Stops do not guarantee maximum loss.",
+                "Intrabar order is not observable.",
+                "Slippage assumptions are estimates.",
+                "Signals are not leakage-verified.",
+                "No profitability guarantee.",
+                "Not approved for real trading.",
+            ],
+
+            "trades": self.trades,
+            "equity_curve": self.equity_curve,
         }
 
 
@@ -1291,9 +1629,9 @@ def load_signals_csv(path):
                     timestamp=int(
                         row["timestamp"]
                     ),
-                    direction=(
-                        row["direction"]
-                    ),
+                    direction=row[
+                        "direction"
+                    ],
                     stop_loss_pct=float(
                         row["stop_loss_pct"]
                     ),
@@ -1301,9 +1639,7 @@ def load_signals_csv(path):
                         row["take_profit_pct"]
                     ),
                     max_holding_minutes=int(
-                        row[
-                            "max_holding_minutes"
-                        ]
+                        row["max_holding_minutes"]
                     ),
                     risk_fraction=float(
                         row["risk_fraction"]
@@ -1336,22 +1672,33 @@ def save_report(report, path):
 
 
 def main():
-    print(
-        "V24.5 BTC Research Backtest Engine"
+    config = load_config()
+
+    engine = BTCBacktestEngine(
+        config
     )
 
     print(
-        "Status:",
-        STATUS
-    )
-
-    print(
-        "No live trading."
-    )
-
-    print(
-        "This module requires historical "
-        "candles and precomputed signals."
+        json.dumps(
+            {
+                "version": VERSION,
+                "status": STATUS,
+                "symbol": "BTC",
+                "config_valid": True,
+                "initial_capital_usdt":
+                    engine.initial_capital,
+                "fee_rate_per_side":
+                    engine.fee_rate,
+                "slippage_rate_per_side":
+                    engine.slippage_rate,
+                "research_only": True,
+                "trading_enabled": False,
+                "note":
+                    "Engine loaded. No historical "
+                    "backtest has been executed."
+            },
+            indent=2
+        )
     )
 
 
