@@ -1,0 +1,68 @@
+name: V24.5 BTC Research Safety Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ai-research/v245/**"
+      - ".github/workflows/ai-research-v245-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research-safety-tests:
+    name: V24.5 Research Safety Tests
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile \
+            ai-research/v245/backtest_engine.py \
+            ai-research/v245/test_backtest_engine.py
+
+      - name: Run V24.5 safety tests
+        working-directory: ai-research/v245
+        run: |
+          python -m unittest discover \
+            -v \
+            -p "test_*.py"
+
+      - name: Verify research-only configuration
+        working-directory: ai-research/v245
+        run: |
+          python - <<'PY'
+          import json
+
+          with open(
+              "research_config.json",
+              encoding="utf-8"
+          ) as f:
+              config = json.load(f)
+
+          assert config["status"] == (
+              "RESEARCH_ONLY_NOT_APPROVED"
+          )
+
+          safety = config["safety"]
+
+          assert safety["research_only"] is True
+          assert safety["trading_enabled"] is False
+          assert safety["live_orders_enabled"] is False
+          assert safety["exchange_order_access"] is False
+          assert safety["model_approved"] is False
+          assert safety["allow_real_capital"] is False
+
+          print("V24.5 RESEARCH SAFETY LOCK: PASSED")
+          PY
