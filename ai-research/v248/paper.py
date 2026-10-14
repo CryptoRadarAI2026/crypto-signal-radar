@@ -1,13 +1,10 @@
-"""V24.8 research-only hourly BTC paper simulator; no exchange credentials/orders."""
-
-import csv
+"""V24.8 hourly observational paper trading. NEVER places real orders."""
 import json
 import math
 import os
 import time
 import urllib.parse
 import urllib.request
-
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,525 +13,158 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 ROOT = Path(__file__).resolve().parents[2]
-
-STATE = ROOT / "research-output/v248/state.json"
-REPORT = ROOT / "research-output/v248/report.json"
-
-CAPITAL = 10000.0
-
+OUT = ROOT / 'research-output' / 'v248'
+STATE = OUT / 'state.json'
+REPORT = OUT / 'report.json'
 FEE = 0.001
 SLIPPAGE = 0.0005
-
-MAX_ALLOCATION = 0.10
-
-HORIZON = 5
-FEATURE_WARMUP = 25
-MIN_ROWS = 650
+HOLD_SECONDS = 5 * 3600
+STARTING_CASH = 10000.0
 
 
-def fetch_json(url):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "CryptoRadarAI2026-V248-paper-research/1.0",
-            "Accept": "application/json",
-        },
-    )
-
-    with urllib.request.urlopen(req, timeout=25) as response:
+def get_json(url):
+    request = urllib.request.Request(url, headers={'User-Agent': 'CryptoRadarAI2026-paper-research/2.0', 'Accept': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
 
-def fetch_candles():
-    # Fetch 60 days of hourly BTC-USD candles.
-    # Only completed candles are accepted.
-
-    end = (int(time.time()) // 3600) * 3600
-    start = end - 60 * 24 * 3600
-
+def candles():
+    """Coinbase hourly OHLCV, ascending; require consecutive *completed* candles."""
+    hour = int(time.time()) // 3600 * 3600
+    start = hour - 60 * 24 * 3600
     rows = {}
-
-    for a in range(start, end, 299 * 3600):
-        b = min(a + 299 * 3600, end)
-
-        query = urllib.parse.urlencode(
-            {
-                "start": datetime.fromtimestamp(
-                    a, timezone.utc
-                ).isoformat(),
-                "end": datetime.fromtimestamp(
-                    b, timezone.utc
-                ).isoformat(),
-                "granularity": 3600,
-            }
-        )
-
-        result = fetch_json(
-            "https://api.exchange.coinbase.com/"
-            "products/BTC-USD/candles?" + query
-        )
-
+    for a in range(start, hour, 299 * 3600):
+        b = min(a + 299 * 3600, hour)
+        q = urllib.parse.urlencode({'start': datetime.fromtimestamp(a, timezone.utc).isoformat(), 'end': datetime.fromtimestamp(b, timezone.utc).isoformat(), 'granularity': 3600})
+        result = get_json('https://api.exchange.coinbase.com/products/BTC-USD/candles?' + q)
         if not isinstance(result, list):
-            raise RuntimeError("Unexpected candle response")
-
-        for x in result:
-            if (
-                len(x) >= 6
-                and a <= int(x[0]) < b
-                and int(x[0]) % 3600 == 0
-            ):
-                rows[int(x[0])] = [
-                    float(x[3]),
-                    float(x[2]),
-                    float(x[1]),
-                    float(x[4]),
-                    float(x[5]),
-                ]
-
-        time.sleep(0.2)
-
+            raise RuntimeError('Invalid candle response')
+        for r in result:
+            if isinstance(r, list) and len(r) >= 6 and a <= int(r[0]) < b and int(r[0]) % 3600 == 0:
+                rows[int(r[0])] = [float(r[3]), float(r[2]), float(r[1]), float(r[4]), float(r[5])]
+        time.sleep(0.15)
     stamps = sorted(rows)
-
-    if len(stamps) < MIN_ROWS or any(
-        b - a != 3600
-        for a, b in zip(stamps, stamps[1:])
-    ):
-        raise RuntimeError(
-            "Incomplete hourly data: refuse to trade"
-        )
-
-    if stamps[-1] < end - 3600:
-        raise RuntimeError(
-            "Stale candles: refuse to trade"
-        )
-
-    return stamps, np.asarray(
-        [rows[t] for t in stamps],
-        dtype=float,
-    )
+    if len(stamps) < 650 or stamps[-1] != hour - 3600 or any(b-a != 3600 for a,b in zip(stamps, stamps[1:])):
+        raise RuntimeError('Missing or stale completed candles: fail closed')
+    data = np.array([rows[t] for t in stamps], dtype=float)
+    if not np.isfinite(data).all() or (data[:, :4] <= 0).any() or (data[:, 4] < 0).any():
+        raise RuntimeError('Invalid OHLCV data')
+    return stamps, data
 
 
-def features(data):
-    closes = data[:, 3]
-    volumes = data[:, 4]
-
-    X = []
-
-    for i in range(FEATURE_WARMUP, len(data)):
-        r1 = math.log(
-            closes[i] / closes[i - 1]
-        )
-
-        r6 = math.log(
-            closes[i] / closes[i - 6]
-        )
-
-        r24 = math.log(
-            closes[i] / closes[i - 24]
-        )
-
-        past = np.diff(
-            np.log(closes[i - 23:i + 1])
-        )
-
-        vol = float(np.std(past))
-
-        volume_ratio = float(
-            volumes[i] /
-            max(
-                1e-9,
-                np.mean(volumes[i - 23:i + 1])
-            )
-        )
-
-        range_ratio = float(
-            (data[i, 1] - data[i, 2]) /
-            closes[i]
-        )
-
-        X.append(
-            [
-                r1,
-                r6,
-                r24,
-                vol,
-                volume_ratio,
-                range_ratio,
-            ]
-        )
-
-    return np.asarray(X, dtype=float)
-
-
-def predict(data):
-    X = features(data)
-    closes = data[:, 3]
-
-    train_count = len(X) - HORIZON - 1
-
-    if train_count < 500:
-        return None, "INSUFFICIENT_TRAINING_DATA"
-
-    y = np.asarray(
-        [
-            int(
-                closes[i + HORIZON] >
-                closes[i]
-            )
-            for i in range(
-                FEATURE_WARMUP,
-                FEATURE_WARMUP + train_count
-            )
-        ]
-    )
-
+def model_probability(data):
+    close, volume = data[:, 3], data[:, 4]
+    feats = []
+    for i in range(25, len(data)):
+        rets = np.diff(np.log(close[i-23:i+1]))
+        feats.append([math.log(close[i]/close[i-1]), math.log(close[i]/close[i-6]), math.log(close[i]/close[i-24]), float(np.std(rets)), float(volume[i]/max(1e-9, np.mean(volume[i-23:i+1]))), float((data[i,1]-data[i,2])/close[i])])
+    x = np.asarray(feats)
+    # Purge last 5 labels from training; latest feature is prediction-only.
+    horizon = 5
+    ntrain = len(x) - horizon
+    if ntrain < 500:
+        return None, 'INSUFFICIENT_HISTORY'
+    y = np.array([int(close[i+horizon] > close[i]) for i in range(25, 25+ntrain)])
     if len(set(y)) < 2:
-        return None, "ONE_CLASS_TRAINING_DATA"
-
-    model = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(
-            max_iter=500,
-            random_state=42,
-        ),
-    )
-
-    model.fit(
-        X[:train_count],
-        y,
-    )
-
-    probability = float(
-        model.predict_proba(
-            X[-1:]
-        )[0, 1]
-    )
-
-    return probability, "OK"
+        return None, 'ONE_CLASS'
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=500, random_state=42))
+    model.fit(x[:ntrain], y)
+    return float(model.predict_proba(x[-1:])[0,1]), 'OK_UNCALIBRATED'
 
 
 def sentiment():
-    # Fear & Greed is a third-party market proxy.
-    # Missing or stale sentiment blocks new entries.
-
     try:
-        result = fetch_json(
-            "https://api.alternative.me/"
-            "fng/?limit=1&format=json"
-        )
-
-        item = result["data"][0]
-
-        age = (
-            time.time() -
-            int(item["timestamp"])
-        )
-
-        if not 0 <= age <= 36 * 3600:
-            return None, "STALE_SENTIMENT"
-
-        value = int(item["value"])
-
-        if not 0 <= value <= 100:
-            raise ValueError(
-                "Invalid sentiment"
-            )
-
-        return value, "OK"
-
-    except (
-        KeyError,
-        ValueError,
-        IndexError,
-        OSError,
-        TimeoutError,
-    ) as exc:
-        return (
-            None,
-            "SENTIMENT_UNAVAILABLE_" +
-            type(exc).__name__,
-        )
+        row = get_json('https://api.alternative.me/fng/?limit=1&format=json')['data'][0]
+        value, published = int(row['value']), int(row['timestamp'])
+        if not 0 <= value <= 100 or not 0 <= time.time() - published <= 36*3600:
+            return None, 'STALE_OR_INVALID'
+        return value, 'OK_THIRD_PARTY'
+    except (OSError, ValueError, KeyError, IndexError, TypeError, TimeoutError):
+        return None, 'UNAVAILABLE'
 
 
-def initial_state():
-    return {
-        "version": "V24.8",
-        "status": "PAPER_TRADING_ONLY",
-        "cash": CAPITAL,
-        "btc": 0.0,
-        "position": None,
-        "last_bar": None,
-        "trades": [],
-        "events": [],
-    }
+def quote():
+    """Observed spot bid/ask; fills are simulated at observation time, not past candle close."""
+    x = get_json('https://api.exchange.coinbase.com/products/BTC-USD/ticker')
+    bid, ask = float(x['bid']), float(x['ask'])
+    if not (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask):
+        raise RuntimeError('Invalid quote')
+    return bid, ask
 
 
-def load_state():
+def initial():
+    return {'version': 'V24.8', 'status': 'PAPER_TRADING_ONLY', 'cash': STARTING_CASH, 'btc': 0.0, 'position': None, 'last_bar': None, 'trades': [], 'events': []}
+
+
+def read_state():
     if not STATE.exists():
-        return initial_state()
-
-    s = json.loads(
-        STATE.read_text(
-            encoding="utf-8"
-        )
-    )
-
-    if s.get("status") != "PAPER_TRADING_ONLY":
-        raise RuntimeError(
-            "Unsafe state status"
-        )
-
+        if os.environ.get('V248_RESTORE_REQUIRED') == '1':
+            raise RuntimeError('State restoration required but missing; refusing reset')
+        return initial()
+    s = json.loads(STATE.read_text(encoding='utf-8'))
+    if s.get('status') != 'PAPER_TRADING_ONLY' or s.get('version') != 'V24.8':
+        raise RuntimeError('Unexpected state version/status')
     return s
 
 
-def execute(
-    stamps,
-    data,
-    s,
-    p,
-    reason,
-    mood,
-):
-    t = stamps[-1]
-    close = float(data[-1, 3])
-
-    if (
-        s["last_bar"] is not None
-        and t <= s["last_bar"]
-    ):
-        return "DUPLICATE_OR_OLD_BAR"
-
-    if s["position"]:
-        pos = s["position"]
-
-        later = [
-            (int(stamps[i]), data[i])
-            for i in range(len(stamps))
-            if stamps[i] > pos["entry_bar"]
-        ]
-
-        exit_price = None
-        exit_reason = None
-        exit_bar = t
-
-        for bt, bar in later:
-            if bar[2] <= pos["stop"]:
-                exit_price = pos["stop"]
-                exit_reason = "STOP"
-                exit_bar = bt
-                break
-
-            if bar[1] >= pos["target"]:
-                exit_price = pos["target"]
-                exit_reason = "TARGET"
-                exit_bar = bt
-                break
-
-            if bt >= pos["expiry_bar"]:
-                exit_price = float(bar[3])
-                exit_reason = "TIME"
-                exit_bar = bt
-                break
-
-        if exit_price is not None:
-            fill = exit_price * (
-                1 - SLIPPAGE
-            )
-
-            proceeds = s["btc"] * fill
-            exit_fee = proceeds * FEE
-
-            s["cash"] += (
-                proceeds - exit_fee
-            )
-
-            pnl = (
-                proceeds -
-                exit_fee -
-                pos["cost"]
-            )
-
-            s["trades"].append(
-                {
-                    "entry_bar": pos["entry_bar"],
-                    "exit_bar": exit_bar,
-                    "reason": exit_reason,
-                    "pnl_usd": round(pnl, 4),
-                    "entry_cost_usd": pos["cost"],
-                    "exit_fee_usd": round(
-                        exit_fee, 4
-                    ),
-                }
-            )
-
-            s["btc"] = 0.0
-            s["position"] = None
-
-    can_enter = (
-        s["position"] is None
-        and reason == "OK"
-        and mood is not None
-        and 25 <= mood <= 75
-        and p is not None
-        and p >= 0.62
-    )
-
-    if can_enter:
-        allocation = (
-            s["cash"] * MAX_ALLOCATION
-        )
-
-        fill = close * (
-            1 + SLIPPAGE
-        )
-
-        fee = allocation * FEE
-
-        qty = (
-            allocation - fee
-        ) / fill
-
-        s["cash"] -= allocation
-        s["btc"] = qty
-
-        s["position"] = {
-            "entry_bar": t,
-            "expiry_bar": (
-                t + HORIZON * 3600
-            ),
-            "entry_price": fill,
-            "stop": fill * 0.985,
-            "target": fill * 1.03,
-            "cost": allocation,
-            "entry_fee_usd": fee,
-            "probability": p,
-            "sentiment": mood,
-        }
-
-    s["last_bar"] = t
-
-    s["events"].append(
-        {
-            "bar": t,
-            "probability": p,
-            "model_status": reason,
-            "sentiment": mood,
-            "position_open": (
-                s["position"] is not None
-            ),
-        }
-    )
-
-    s["events"] = (
-        s["events"][-500:]
-    )
-
-    return "PROCESSED"
+def step(s, bar, now, bid, ask, p, model_status, mood, sentiment_status):
+    """One decision per completed candle; existing position evaluated at current observed quote."""
+    if s['last_bar'] is not None and bar <= s['last_bar']:
+        return 'NO_NEW_BAR'
+    action = 'WAIT'
+    pos = s['position']
+    if pos is not None:
+        exit_reason = ('STOP_OBSERVED' if bid <= pos['stop'] else
+                       'TARGET_OBSERVED' if bid >= pos['target'] else
+                       'TIME_OBSERVED' if now >= pos['expires_at'] else None)
+        if exit_reason:
+            sell = bid * (1 - SLIPPAGE)
+            proceeds = s['btc'] * sell
+            fee = proceeds * FEE
+            pnl = proceeds - fee - pos['total_entry_cost']
+            s['cash'] += proceeds - fee
+            s['trades'].append({'entry_observed_at': pos['opened_at'], 'exit_observed_at': now, 'entry_bar': pos['signal_bar'], 'exit_bar': bar, 'exit_reason': exit_reason, 'pnl_usd': round(pnl, 6), 'entry_fee_usd': pos['entry_fee'], 'exit_fee_usd': round(fee, 6), 'entry_price': pos['entry_price'], 'exit_price': sell})
+            s['btc'] = 0.0
+            s['position'] = None
+            action = 'EXIT_' + exit_reason
+    # Do not re-enter on same observation as an exit.
+    if action == 'WAIT' and s['position'] is None and model_status == 'OK_UNCALIBRATED' and mood is not None and 25 <= mood <= 75 and p is not None and p >= 0.62:
+        spend = s['cash'] * 0.10
+        entry = ask * (1 + SLIPPAGE)
+        fee = spend * FEE
+        qty = (spend - fee) / entry
+        if qty > 0:
+            s['cash'] -= spend
+            s['btc'] = qty
+            s['position'] = {'opened_at': now, 'signal_bar': bar, 'expires_at': now + HOLD_SECONDS, 'entry_price': entry, 'entry_fee': fee, 'total_entry_cost': spend, 'stop': entry * 0.985, 'target': entry * 1.03, 'probability_uncalibrated': p, 'sentiment': mood}
+            action = 'ENTER_PAPER'
+    s['last_bar'] = bar
+    s['events'].append({'observed_at': now, 'completed_bar': bar, 'action': action, 'probability_uncalibrated': p, 'model_status': model_status, 'sentiment': mood, 'sentiment_status': sentiment_status})
+    s['events'] = s['events'][-500:]
+    return action
 
 
 def main():
-    stamps, data = fetch_candles()
-
-    state = load_state()
-
-    if (
-        state["last_bar"] is not None
-        and stamps[-1] <= state["last_bar"]
-    ):
-        print(
-            "No new completed candle"
-        )
+    stamps, data = candles()
+    s = read_state()
+    if s['last_bar'] is not None and stamps[-1] <= s['last_bar']:
+        print('No new completed candle; no state changes')
         return
-
-    p, reason = predict(data)
-
-    mood, sentiment_status = sentiment()
-
-    action = execute(
-        stamps,
-        data,
-        state,
-        p,
-        reason,
-        mood,
-    )
-
-    STATE.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    STATE.write_text(
-        json.dumps(
-            state,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    price = float(data[-1, 3])
-
-    report = {
-        "version": "V24.8",
-        "status": "PAPER_TRADING_ONLY",
-        "trading_enabled": False,
-        "orders_sent": 0,
-        "bar_utc": datetime.fromtimestamp(
-            stamps[-1],
-            timezone.utc,
-        ).isoformat(),
-        "action": action,
-        "model_probability_uncalibrated": p,
-        "model_status": reason,
-        "sentiment_index": mood,
-        "sentiment_status": sentiment_status,
-        "sentiment_is_third_party_proxy": True,
-        "closed_trades": len(
-            state["trades"]
-        ),
-        "cash_usd": round(
-            state["cash"], 2
-        ),
-        "btc_virtual": state["btc"],
-        "equity_usd": round(
-            state["cash"] +
-            state["btc"] * price,
-            2,
-        ),
-        "realized_pnl_usd": round(
-            sum(
-                trade["pnl_usd"]
-                for trade in state["trades"]
-            ),
-            2,
-        ),
-        "position": state["position"],
-        "limitations": [
-            "No live execution or exchange orders",
-            "Uncalibrated model; no demonstrated out-of-sample edge",
-            "Hourly polling and OHLC approximations; gaps between runs",
-            "Fear and Greed is unverified third-party proxy",
-            "Fees and slippage are assumptions",
-        ],
-    }
-
-    REPORT.write_text(
-        json.dumps(
-            report,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    print(
-        json.dumps(
-            report,
-            indent=2,
-        )
-    )
+    p, status = model_probability(data)
+    mood, mood_status = sentiment()
+    bid, ask = quote()
+    now = int(time.time())
+    action = step(s, stamps[-1], now, bid, ask, p, status, mood, mood_status)
+    OUT.mkdir(parents=True, exist_ok=True)
+    # Atomic replace prevents partially written state in a runner.
+    temp = STATE.with_suffix('.json.tmp')
+    temp.write_text(json.dumps(s, indent=2), encoding='utf-8')
+    temp.replace(STATE)
+    report = {'version': 'V24.8', 'status': 'PAPER_TRADING_ONLY', 'orders_sent': 0, 'observed_at_utc': datetime.fromtimestamp(now, timezone.utc).isoformat(), 'last_completed_bar_utc': datetime.fromtimestamp(stamps[-1], timezone.utc).isoformat(), 'action': action, 'model_probability_uncalibrated': p, 'model_status': status, 'fear_greed': mood, 'sentiment_status': mood_status, 'bid_observed': bid, 'ask_observed': ask, 'cash_usd': round(s['cash'], 2), 'btc_virtual': s['btc'], 'equity_usd_estimated_at_bid': round(s['cash'] + s['btc']*bid, 2), 'closed_trades': len(s['trades']), 'realized_pnl_usd': round(sum(t['pnl_usd'] for t in s['trades']), 2), 'position': s['position'], 'limitations': ['Paper fills only; no actual orders', 'Hourly observation can miss stop/target touches and gaps', 'Sentiment is a third-party proxy', 'Model uncalibrated and not proven profitable', 'Simulated fee/slippage']}
+    REPORT.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    print(json.dumps(report, indent=2))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
