@@ -1,0 +1,63 @@
+name: AI Research V24.2 - Real Data Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-data-audit:
+    name: V24.2 BTC ETH SOL Data Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install research dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scikit-learn
+
+      - name: Verify audit and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ai-research/v24/ai-research/v24/audit.py
+          test -s ai-research/v24/ai-research/v24/test_audit.py
+          python -m unittest discover -s ai-research/v24/ai-research/v24 -p 'test_audit.py' -v
+
+      - name: Download and evaluate 90 days of public market data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/v242
+          python ai-research/train_public_data.py --days 90 2>&1 | tee reports/v242/data_pipeline.log
+
+      - name: Audit real BTC ETH SOL data and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ai-research/v24/ai-research/v24/audit.py \
+            --raw-dir data/raw \
+            --manifest reports/source_manifest.json \
+            --output reports/v242/real_data_audit.json \
+            2>&1 | tee reports/v242/audit.log
+
+      - name: Upload V24.2 reports even if audit fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v242-real-data-audit-reports
+          path: |
+            reports/v242/
+            reports/source_manifest.json
+            reports/real_data_training.json
+          if-no-files-found: warn
+          retention-days: 30
