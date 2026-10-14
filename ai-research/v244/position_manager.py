@@ -1,29 +1,48 @@
 """
 V24.4 - BTC Multi-Position Research Ledger
 
-Research-only accounting for simulated BTC positions.
+Research-only accounting for hypothetical BTC futures positions.
 
-NO EXCHANGE CONNECTIONS.
-NO REAL ORDERS.
-NO LIVE TRADING.
-NO TRADING APPROVAL.
+SAFETY:
+- NO EXCHANGE CONNECTIONS
+- NO REAL ORDERS
+- NO LIVE TRADING
+- NO TRADING APPROVAL
 
-Important:
-- This is an accounting ledger, not an execution engine.
-- Positions are imported as hypothetical fills.
-- No liquidation, funding, slippage, or intrabar execution.
-- No position may be opened through this module.
+This module:
+- Imports hypothetical positions.
+- Calculates mark-to-market PnL.
+- Estimates margin and portfolio exposure.
+- Reports research risk-limit violations.
+
+This module DOES NOT:
+- Open or close positions.
+- Simulate liquidation.
+- Simulate order execution.
+- Guarantee stop-loss execution.
+- Model funding, slippage or intrabar price paths.
+
+All outputs are preliminary research estimates.
 """
 
 import json
 import math
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 
 
 CONFIG_PATH = Path(__file__).with_name(
     "research_config.json"
 )
+
+
+REQUIRED_SAFETY = {
+    "research_only": True,
+    "trading_enabled": False,
+    "live_orders_enabled": False,
+    "exchange_order_access": False,
+    "model_approved": False,
+}
 
 
 def valid_number(value):
@@ -48,37 +67,78 @@ def require_nonnegative(name, value):
         )
 
 
-def load_research_config(path=CONFIG_PATH):
-    with open(path, "r", encoding="utf-8") as file:
-        config = json.load(file)
-
-    safety = config.get("safety", {})
-
-    required = {
-        "research_only": True,
-        "trading_enabled": False,
-        "live_orders_enabled": False,
-        "exchange_order_access": False,
-        "model_approved": False,
-    }
-
-    for key, expected in required.items():
-        if safety.get(key) is not expected:
-            raise ValueError(
-                f"Research safety lock failed: {key}"
-            )
+def verify_research_safety(config):
+    if not isinstance(config, dict):
+        raise ValueError("Invalid research configuration")
 
     if config.get("status") != (
         "RESEARCH_ONLY_NOT_APPROVED"
     ):
         raise ValueError(
-            "Research status must remain locked"
+            "Research status is not locked"
         )
 
-    if config.get("market", {}).get("symbol") != "BTC":
+    safety = config.get("safety", {})
+
+    if not isinstance(safety, dict):
+        raise ValueError("Invalid safety configuration")
+
+    for key, expected in REQUIRED_SAFETY.items():
+        if safety.get(key) is not expected:
+            raise ValueError(
+                f"Research safety lock failed: {key}"
+            )
+
+    market = config.get("market", {})
+
+    if market.get("symbol") != "BTC":
         raise ValueError(
-            "V24.4 ledger supports BTC only"
+            "V24.4 supports BTC only"
         )
+
+    if market.get("market_type") != (
+        "futures_simulation"
+    ):
+        raise ValueError(
+            "Only futures simulation is supported"
+        )
+
+    risk = config.get("risk_management", {})
+
+    required_positive = (
+        "maximum_simulated_leverage",
+        "max_gross_notional_to_equity",
+        "max_total_planned_risk_fraction",
+    )
+
+    for key in required_positive:
+        require_positive(
+            key,
+            risk.get(key),
+        )
+
+    if risk.get("independent_risk_engine") is not True:
+        raise ValueError(
+            "Independent risk engine must be enabled"
+        )
+
+    if risk.get("emergency_stop_enabled") is not True:
+        raise ValueError(
+            "Emergency stop must be enabled"
+        )
+
+    return True
+
+
+def load_research_config(path=CONFIG_PATH):
+    with open(
+        path,
+        "r",
+        encoding="utf-8",
+    ) as file:
+        config = json.load(file)
+
+    verify_research_safety(config)
 
     return config
 
@@ -99,34 +159,52 @@ class SimulatedPosition:
             not isinstance(self.position_id, str)
             or not self.position_id.strip()
         ):
-            raise ValueError("Invalid position ID")
+            raise ValueError(
+                "Invalid position ID"
+            )
 
-        if self.direction not in ("LONG", "SHORT"):
-            raise ValueError("Invalid direction")
+        if self.direction not in (
+            "LONG",
+            "SHORT",
+        ):
+            raise ValueError(
+                "Direction must be LONG or SHORT"
+            )
 
         require_positive(
-            "entry_price", self.entry_price
+            "entry_price",
+            self.entry_price,
         )
+
         require_positive(
-            "quantity_btc", self.quantity_btc
+            "quantity_btc",
+            self.quantity_btc,
         )
+
         require_positive(
-            "leverage", self.leverage
+            "leverage",
+            self.leverage,
         )
+
         require_positive(
-            "protective_stop", self.protective_stop
+            "protective_stop",
+            self.protective_stop,
         )
+
         require_nonnegative(
-            "entry_fee_usdt", self.entry_fee_usdt
+            "entry_fee_usdt",
+            self.entry_fee_usdt,
         )
+
         require_nonnegative(
             "planned_risk_usdt",
-            self.planned_risk_usdt
+            self.planned_risk_usdt,
         )
 
         if (
             self.direction == "LONG"
-            and self.protective_stop >= self.entry_price
+            and self.protective_stop
+            >= self.entry_price
         ):
             raise ValueError(
                 "LONG stop must be below entry"
@@ -134,7 +212,8 @@ class SimulatedPosition:
 
         if (
             self.direction == "SHORT"
-            and self.protective_stop <= self.entry_price
+            and self.protective_stop
+            <= self.entry_price
         ):
             raise ValueError(
                 "SHORT stop must be above entry"
@@ -142,24 +221,36 @@ class SimulatedPosition:
 
     @property
     def entry_notional_usdt(self):
-        return self.entry_price * self.quantity_btc
+        return (
+            self.entry_price
+            * self.quantity_btc
+        )
 
     @property
     def initial_margin_usdt(self):
         return (
-            self.entry_notional_usdt / self.leverage
+            self.entry_notional_usdt
+            / self.leverage
         )
 
     def unrealized_pnl(self, mark_price):
-        require_positive("mark_price", mark_price)
+        require_positive(
+            "mark_price",
+            mark_price,
+        )
 
         direction_sign = (
-            1 if self.direction == "LONG" else -1
+            1
+            if self.direction == "LONG"
+            else -1
         )
 
         return (
             direction_sign
-            * (mark_price - self.entry_price)
+            * (
+                mark_price
+                - self.entry_price
+            )
             * self.quantity_btc
         )
 
@@ -174,6 +265,14 @@ class SimulatedPosition:
 
 
 class ResearchPositionLedger:
+    """
+    Accounting ledger for imported hypothetical positions.
+
+    No open_position(), close_position(), or
+    place_order() methods are provided.
+
+    Imported positions are not approved executions.
+    """
 
     def __init__(
         self,
@@ -181,51 +280,40 @@ class ResearchPositionLedger:
         positions,
         config=None,
     ):
-        """
-        Import existing hypothetical positions.
-
-        This class deliberately has no open_position()
-        or place_order() method.
-
-        All imported positions are accounting examples,
-        NOT approved executions.
-        """
-
         self.config = (
             load_research_config()
             if config is None
             else config
         )
 
-        self._verify_safety()
+        verify_research_safety(
+            self.config
+        )
 
         require_positive(
             "initial_capital_usdt",
-            initial_capital_usdt
+            initial_capital_usdt,
         )
 
         if not isinstance(positions, list):
             raise ValueError(
-                "positions must be a list"
+                "Positions must be a list"
             )
 
-        self.initial_capital_usdt = (
-            initial_capital_usdt
-        )
-
-        self.positions = list(positions)
-
         if not all(
-            isinstance(p, SimulatedPosition)
-            for p in self.positions
+            isinstance(
+                position,
+                SimulatedPosition,
+            )
+            for position in positions
         ):
             raise ValueError(
                 "All positions must be simulated"
             )
 
         ids = [
-            p.position_id
-            for p in self.positions
+            position.position_id
+            for position in positions
         ]
 
         if len(ids) != len(set(ids)):
@@ -233,39 +321,21 @@ class ResearchPositionLedger:
                 "Duplicate position IDs"
             )
 
-        max_leverage = self.config[
+        maximum_leverage = self.config[
             "risk_management"
         ]["maximum_simulated_leverage"]
 
-        for position in self.positions:
-            if position.leverage > max_leverage:
+        for position in positions:
+            if position.leverage > maximum_leverage:
                 raise ValueError(
-                    "Simulated leverage exceeds limit"
+                    "Simulated leverage limit exceeded"
                 )
 
-    def _verify_safety(self):
-        safety = self.config.get("safety", {})
+        self.initial_capital_usdt = (
+            initial_capital_usdt
+        )
 
-        if (
-            safety.get("research_only") is not True
-            or safety.get("trading_enabled") is not False
-            or safety.get("live_orders_enabled") is not False
-            or safety.get("exchange_order_access")
-            is not False
-            or safety.get("model_approved") is not False
-            or self.config.get("status")
-            != "RESEARCH_ONLY_NOT_APPROVED"
-        ):
-            raise ValueError(
-                "Research safety lock failed"
-            )
-
-        if self.config.get(
-            "market", {}
-        ).get("symbol") != "BTC":
-            raise ValueError(
-                "Only BTC is supported"
-            )
+        self.positions = tuple(positions)
 
     def snapshot(
         self,
@@ -274,56 +344,57 @@ class ResearchPositionLedger:
         additional_costs_usdt=0.0,
     ):
         """
-        Mark all imported positions to one BTC price.
-
-        This is a simplified accounting snapshot.
+        Produce an accounting snapshot.
 
         realized_pnl_usdt:
-            External historical realized PnL.
+            Externally supplied historical realized PnL.
 
         additional_costs_usdt:
-            External accumulated fees/funding/etc.
-            supplied by a trusted research dataset.
+            Externally supplied accumulated costs,
+            excluding entry fees listed in positions.
 
-        Entry fees are deducted separately below.
+        Margin values are simplified estimates.
 
-        This does not model liquidation or execution.
+        This method does not approve new positions.
         """
 
-        self._verify_safety()
-
-        require_positive(
-            "mark_price", mark_price
+        verify_research_safety(
+            self.config
         )
 
-        if not valid_number(realized_pnl_usdt):
+        require_positive(
+            "mark_price",
+            mark_price,
+        )
+
+        if not valid_number(
+            realized_pnl_usdt
+        ):
             raise ValueError(
                 "Invalid realized PnL"
             )
 
         require_nonnegative(
             "additional_costs_usdt",
-            additional_costs_usdt
-        )
-
-        entry_fees = sum(
-            p.entry_fee_usdt
-            for p in self.positions
+            additional_costs_usdt,
         )
 
         total_unrealized = 0.0
         total_margin = 0.0
         total_gross_notional = 0.0
         total_planned_risk = 0.0
+        total_entry_fees = 0.0
 
         position_reports = []
 
         for position in self.positions:
-            pnl = position.unrealized_pnl(
-                mark_price
+            unrealized = (
+                position.unrealized_pnl(
+                    mark_price
+                )
             )
 
-            margin = (
+            initial_margin = (
                 position.initial_margin_usdt
             )
 
@@ -336,12 +407,15 @@ class ResearchPositionLedger:
                 position.planned_stop_loss_usdt()
             )
 
-            total_unrealized += pnl
-            total_margin += margin
+            total_unrealized += unrealized
+            total_margin += initial_margin
             total_gross_notional += (
                 current_notional
             )
             total_planned_risk += stop_risk
+            total_entry_fees += (
+                position.entry_fee_usdt
+            )
 
             position_reports.append({
                 "position_id":
@@ -359,27 +433,42 @@ class ResearchPositionLedger:
                 "entry_notional_usdt":
                     round(
                         position.entry_notional_usdt,
-                        2
+                        2,
                     ),
                 "current_notional_usdt":
                     round(
-                        current_notional, 2
+                        current_notional,
+                        2,
                     ),
                 "initial_margin_usdt":
-                    round(margin, 2),
+                    round(
+                        initial_margin,
+                        2,
+                    ),
                 "unrealized_pnl_usdt":
-                    round(pnl, 2),
+                    round(
+                        unrealized,
+                        2,
+                    ),
                 "protective_stop":
                     position.protective_stop,
                 "planned_stop_loss_usdt":
-                    round(stop_risk, 2),
+                    round(
+                        stop_risk,
+                        2,
+                    ),
+                "entry_fee_usdt":
+                    round(
+                        position.entry_fee_usdt,
+                        2,
+                    ),
                 "research_only": True,
             })
 
         cash_equity = (
             self.initial_capital_usdt
             + realized_pnl_usdt
-            - entry_fees
+            - total_entry_fees
             - additional_costs_usdt
         )
 
@@ -398,73 +487,150 @@ class ResearchPositionLedger:
             - total_margin
         )
 
-        max_gross_ratio = self.config[
+        risk_config = self.config[
             "risk_management"
-        ]["max_gross_notional_to_equity"]
+        ]
+
+        max_gross_ratio = risk_config[
+            "max_gross_notional_to_equity"
+        ]
 
         gross_limit = max(
             0.0,
-            marked_equity * max_gross_ratio
+            marked_equity
+            * max_gross_ratio,
         )
 
         gross_limit_exceeded = (
-            total_gross_notional > gross_limit
+            total_gross_notional
+            > gross_limit
         )
 
-        max_risk_fraction = self.config[
-            "risk_management"
-        ]["max_total_planned_risk_fraction"]
+        max_risk_fraction = risk_config[
+            "max_total_planned_risk_fraction"
+        ]
 
         risk_limit = max(
             0.0,
-            marked_equity * max_risk_fraction
+            marked_equity
+            * max_risk_fraction,
         )
 
         risk_limit_exceeded = (
-            total_planned_risk > risk_limit
+            total_planned_risk
+            > risk_limit
         )
+
+        insufficient_margin = (
+            available_equity_estimate < 0
+        )
+
+        risk_alerts = []
+
+        if gross_limit_exceeded:
+            risk_alerts.append(
+                "GROSS_EXPOSURE_LIMIT_EXCEEDED"
+            )
+
+        if risk_limit_exceeded:
+            risk_alerts.append(
+                "PLANNED_RISK_LIMIT_EXCEEDED"
+            )
+
+        if insufficient_margin:
+            risk_alerts.append(
+                "NEGATIVE_MARGIN_ESTIMATE"
+            )
+
+        if marked_equity <= 0:
+            risk_alerts.append(
+                "NONPOSITIVE_MARKED_EQUITY"
+            )
 
         return {
             "version": "V24.4",
             "status":
                 "RESEARCH_ONLY_NOT_APPROVED",
             "symbol": "BTC",
+            "market_type":
+                "futures_simulation",
             "research_only": True,
             "trading_enabled": False,
+            "live_trading_allowed": False,
             "execution_ready": False,
             "accounting_only": True,
             "initial_capital_usdt":
                 self.initial_capital_usdt,
-            "mark_price": mark_price,
+            "mark_price":
+                mark_price,
             "position_count":
                 len(self.positions),
-            "positions": position_reports,
+            "positions":
+                position_reports,
+            "realized_pnl_usdt":
+                round(
+                    realized_pnl_usdt,
+                    2,
+                ),
+            "entry_fees_usdt":
+                round(
+                    total_entry_fees,
+                    2,
+                ),
+            "additional_costs_usdt":
+                round(
+                    additional_costs_usdt,
+                    2,
+                ),
             "cash_equity_usdt":
-                round(cash_equity, 2),
+                round(
+                    cash_equity,
+                    2,
+                ),
             "unrealized_pnl_usdt":
-                round(total_unrealized, 2),
+                round(
+                    total_unrealized,
+                    2,
+                ),
             "marked_equity_usdt":
-                round(marked_equity, 2),
+                round(
+                    marked_equity,
+                    2,
+                ),
             "initial_margin_used_usdt":
-                round(total_margin, 2),
+                round(
+                    total_margin,
+                    2,
+                ),
             "free_margin_estimate_usdt":
-                round(free_margin_estimate, 2),
+                round(
+                    free_margin_estimate,
+                    2,
+                ),
             "available_equity_estimate_usdt":
                 round(
-                    available_equity_estimate, 2
+                    available_equity_estimate,
+                    2,
                 ),
             "gross_notional_usdt":
                 round(
-                    total_gross_notional, 2
+                    total_gross_notional,
+                    2,
                 ),
             "gross_limit_exceeded":
                 gross_limit_exceeded,
             "planned_stop_risk_usdt":
                 round(
-                    total_planned_risk, 2
+                    total_planned_risk,
+                    2,
                 ),
             "planned_risk_limit_exceeded":
                 risk_limit_exceeded,
+            "insufficient_margin_estimate":
+                insufficient_margin,
+            "risk_alerts":
+                risk_alerts,
+            "risk_checks_complete": False,
             "liquidation_checked": False,
             "slippage_checked": False,
             "funding_checked": False,
@@ -479,5 +645,48 @@ def main():
         "portfolio"
     ]["initial_capital_usdt"]
 
-    # Example positions only.
-    # These are
+    # Hypothetical examples only.
+    # These are NOT trading recommendations.
+
+    examples = [
+        SimulatedPosition(
+            position_id="BTC-LONG-001",
+            direction="LONG",
+            entry_price=100000,
+            quantity_btc=0.03,
+            leverage=2,
+            protective_stop=99000,
+            entry_fee_usdt=1.2,
+        ),
+        SimulatedPosition(
+            position_id="BTC-SHORT-002",
+            direction="SHORT",
+            entry_price=101000,
+            quantity_btc=0.02,
+            leverage=2,
+            protective_stop=102000,
+            entry_fee_usdt=0.8,
+        ),
+    ]
+
+    ledger = ResearchPositionLedger(
+        initial_capital_usdt=capital,
+        positions=examples,
+        config=config,
+    )
+
+    report = ledger.snapshot(
+        mark_price=100500
+    )
+
+    print(
+        json.dumps(
+            report,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
