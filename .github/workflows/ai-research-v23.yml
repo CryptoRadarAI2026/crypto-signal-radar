@@ -1,0 +1,29 @@
+name: AI Research V23 - Guarded Data Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v23:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run V23 synthetic integrity tests (no market files)
+        run: python ai-research/v23/audit_v23.py
+      - name: Upload V23 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-research-v23-quality
+          path: reports/v23/quality.json
+          if-no-files-found: error
+          retention-days: 30
