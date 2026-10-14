@@ -1,0 +1,147 @@
+{
+  "version": "V24.5",
+  "project": "BTC Intelligent Futures Research Simulator",
+  "status": "RESEARCH_ONLY_NOT_APPROVED",
+
+  "safety": {
+    "research_only": true,
+    "trading_enabled": false,
+    "live_orders_enabled": false,
+    "exchange_order_access": false,
+    "model_approved": false,
+    "allow_real_capital": false
+  },
+
+  "market": {
+    "symbol": "BTC",
+    "reference_pair": "BTC-USD",
+    "market_type": "futures_research_simulation",
+    "candle_interval_minutes": 1,
+    "analysis_interval_minutes": 1,
+    "allowed_signals": [
+      "LONG",
+      "SHORT",
+      "WAIT"
+    ],
+    "allow_multiple_simulated_positions": true,
+    "compare_hedge_and_net_modes": true
+  },
+
+  "data": {
+    "source": "coinbase_public_historical_candles",
+    "historical_days": 90,
+    "require_continuous_timestamps": true,
+    "reject_duplicate_timestamps": true,
+    "reject_invalid_ohlcv": true,
+    "require_chronological_order": true,
+    "allow_future_data_in_features": false,
+    "allow_future_data_in_signals": false,
+    "note": "Coinbase spot candles are a price proxy, not futures execution data."
+  },
+
+  "portfolio": {
+    "initial_capital_usdt": 10000,
+    "dynamic_position_sizing": true,
+    "reserve_capital_fraction": 0.2,
+    "allow_multiple_positions": true,
+    "fixed_position_count_limit": null,
+    "independent_position_management": true
+  },
+
+  "risk_management": {
+    "independent_risk_engine": true,
+    "risk_per_position_fraction": 0.005,
+    "max_total_planned_risk_fraction": 0.02,
+    "max_daily_loss_fraction": 0.02,
+    "max_gross_notional_to_equity": 2.0,
+    "maximum_simulated_leverage": 10,
+    "allow_widening_protective_stop": false,
+    "emergency_stop_enabled": true,
+    "reject_new_positions_when_risk_limit_reached": true,
+    "require_positive_equity": true,
+    "include_gap_and_stop_slippage_stress": true,
+    "treat_planned_stop_risk_as_non_guaranteed": true
+  },
+
+  "position_management": {
+    "evaluate_every_candle": true,
+    "maximum_holding_minutes": 360,
+    "dynamic_take_profit": true,
+    "volatility_based_initial_stop": true,
+    "trailing_stop_enabled": true,
+    "allow_independent_exits": true,
+    "allow_partial_profit_taking_in_research": true,
+    "allow_stop_tightening": true,
+    "allow_stop_widening": false,
+    "require_exit_reason": true
+  },
+
+  "execution_assumptions": {
+    "mode": "historical_simulation_only",
+    "signal_at_completed_candle": true,
+    "earliest_entry": "next_candle_open",
+    "market_order_fee_fraction_per_side": 0.0006,
+    "base_slippage_fraction_per_side": 0.0002,
+    "stress_slippage_fraction_per_side": 0.001,
+    "funding_rate_source": "not_available",
+    "funding_treatment": "report_unverified_and_stress_test",
+    "liquidation_model": "not_implemented",
+    "allow_execution_ready_claim": false,
+    "same_candle_stop_and_target_policy": "stop_first",
+    "gap_through_stop_policy": "adverse_open_with_slippage",
+    "note": "Fees and slippage are research assumptions, not verified exchange quotes."
+  },
+
+  "strategy_research": {
+    "signals": [
+      "LONG",
+      "SHORT",
+      "WAIT"
+    ],
+    "features": [
+      "returns",
+      "ema_trend",
+      "rsi",
+      "atr",
+      "volume_ratio",
+      "candle_range",
+      "volatility_regime"
+    ],
+    "prediction_horizons_minutes": [
+      1,
+      5,
+      15
+    ],
+    "dynamic_stop_method": "atr_based",
+    "dynamic_target_method": "volatility_and_expected_move",
+    "compare_with_wait_baseline": true,
+    "compare_with_no_leverage_baseline": true,
+    "avoid_fixed_profit_guarantees": true
+  },
+
+  "validation": {
+    "chronological_split": true,
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2,
+    "holdout_fraction": 0.2,
+    "purge_overlapping_labels": true,
+    "walk_forward_required": true,
+    "holdout_used_for_model_selection": false,
+    "require_out_of_sample_results": true,
+    "report_results_by_market_regime": true,
+    "report_long_and_short_separately": true,
+    "report_trade_count": true,
+    "report_net_pnl": true,
+    "report_profit_factor": true,
+    "report_max_drawdown": true,
+    "report_fees_and_slippage": true,
+    "report_liquidation_model_missing": true
+  },
+
+  "approval": {
+    "automatic_approval": false,
+    "trading_approval": false,
+    "execution_ready": false,
+    "require_manual_research_review": true
+  }
+}
