@@ -1,0 +1,33 @@
+name: V24.7 BTC Research Validation
+on:
+  workflow_dispatch:
+    inputs:
+      candles_path:
+        description: 'Path to BTC-USD one-minute CSV in repository'
+        required: true
+        type: string
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Engine regression tests
+        run: python -m unittest discover -s ai-research/v247 -p 'test_*.py' -v
+      - name: Historical validation
+        env:
+          CANDLES_PATH: ${{ inputs.candles_path }}
+        run: |
+          test -f "$CANDLES_PATH" || { echo "Missing candles CSV: $CANDLES_PATH"; exit 1; }
+          python ai-research/v247/run_validation.py --candles "$CANDLES_PATH" --output ai-research/v247/validation_report.json
+      - name: Upload research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v247-research-report
+          path: ai-research/v247/validation_report.json
+          if-no-files-found: warn
