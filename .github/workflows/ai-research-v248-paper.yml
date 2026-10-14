@@ -4,10 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       bootstrap:
-        description: 'FIRST RUN ONLY: initialize 10000 virtual USD (never use again)'
+        description: "FIRST RUN ONLY - initialize 10000 virtual USD"
         type: boolean
         required: true
         default: false
+
+  schedule:
+    - cron: "10 * * * *"
 
 permissions:
   contents: read
@@ -19,64 +22,303 @@ concurrency:
 
 jobs:
   paper-trading:
+    name: BTC Paper Trading Research
     runs-on: ubuntu-latest
+
     timeout-minutes: 15
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      V248_RESTORE_REQUIRED: "1"
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install numpy scikit-learn
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scikit-learn
 
-      - name: Find and restore previous state (fail closed)
+      - name: Restore previous paper state
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          BOOTSTRAP: ${{ inputs.bootstrap }}
-        shell: bash
+          WORKFLOW_FILE: ai-research-v248-paper.yml
+          BOOTSTRAP: ${{ github.event.inputs.bootstrap || 'false' }}
         run: |
-          set -euo pipefail
-          mkdir -p research-output/v248
-          # List artifacts by name; the most recent unexpired artifact is the prior state.
-          artifact_id=$(gh api "repos/$REPO/actions/artifacts?name=v248-paper-state&per_page=100" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].id // empty')
-          if [[ -n "$artifact_id" ]]; then
-            if [[ "$BOOTSTRAP" == 'true' ]]; then
-              echo 'ERROR: previous state exists; bootstrap is forbidden.' >&2
-              exit 1
-            fi
-            gh api "repos/$REPO/actions/artifacts/$artifact_id/zip" > /tmp/v248-state.zip
-            python - <<'PY'
-          import json, zipfile
+          python - <<'PY'
+          import io
+          import json
+          import os
+          import sys
+          import urllib.request
+          import zipfile
           from pathlib import Path
-          with zipfile.ZipFile('/tmp/v248-state.zip') as z:
-              names = z.namelist()
-              if names != ['state.json']:
-                  raise RuntimeError(f'Unexpected state artifact contents: {names}')
-              raw = z.read('state.json')
-              state = json.loads(raw)
-              if state.get('version') != 'V24.8' or state.get('status') != 'PAPER_TRADING_ONLY':
-                  raise RuntimeError('Invalid restored state')
-              Path('research-output/v248/state.json').write_bytes(raw)
+
+          token = os.environ["GH_TOKEN"]
+          repo = os.environ["REPO"]
+          workflow = os.environ["WORKFLOW_FILE"]
+          bootstrap = os.environ["BOOTSTRAP"].lower() == "true"
+
+          out = Path("research-output/v248")
+          out.mkdir(parents=True, exist_ok=True)
+          state_path = out / "state.json"
+
+          base = (
+              "https://api.github.com/repos/"
+              + repo
+          )
+
+          headers = {
+              "Authorization": "Bearer " + token,
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "V248-paper-research",
+          }
+
+          def api_json(url):
+              req = urllib.request.Request(
+                  url,
+                  headers=headers,
+              )
+              with urllib.request.urlopen(
+                  req,
+                  timeout=30,
+              ) as response:
+                  return json.load(response)
+
+          def download_artifact(artifact_id):
+              url = (
+                  base
+                  + "/actions/artifacts/"
+                  + str(artifact_id)
+                  + "/zip"
+              )
+              req = urllib.request.Request(
+                  url,
+                  headers=headers,
+              )
+              with urllib.request.urlopen(
+                  req,
+                  timeout=60,
+              ) as response:
+                  return response.read()
+
+          print("Searching previous successful V24.8 runs")
+
+          runs = []
+
+          for page in range(1, 6):
+              url = (
+                  base
+                  + "/actions/workflows/"
+                  + workflow
+                  + "/runs"
+                  + "?status=success"
+                  + "&per_page=100"
+                  + "&page="
+                  + str(page)
+              )
+
+              response = api_json(url)
+              batch = response.get("workflow_runs", [])
+
+              if not batch:
+                  break
+
+              runs.extend(batch)
+
+              if len(batch) < 100:
+                  break
+
+          runs.sort(
+              key=lambda r: r.get("run_number", 0),
+              reverse=True,
+          )
+
+          restored = False
+
+          for run in runs:
+              if run.get("head_branch") != "main":
+                  continue
+
+              run_id = run["id"]
+
+              url = (
+                  base
+                  + "/actions/runs/"
+                  + str(run_id)
+                  + "/artifacts"
+                  + "?per_page=100"
+              )
+
+              result = api_json(url)
+
+              artifacts = result.get("artifacts", [])
+
+              for artifact in artifacts:
+                  if artifact.get("expired"):
+                      continue
+
+                  name = artifact.get("name", "")
+
+                  if "v248" not in name.lower():
+                      continue
+
+                  raw = download_artifact(artifact["id"])
+
+                  with zipfile.ZipFile(
+                      io.BytesIO(raw)
+                  ) as archive:
+
+                      matches = [
+                          item
+                          for item in archive.namelist()
+                          if item == "state.json"
+                          or item.endswith("/state.json")
+                      ]
+
+                      if not matches:
+                          continue
+
+                      if len(matches) != 1:
+                          raise RuntimeError(
+                              "Ambiguous state files"
+                          )
+
+                      data = json.loads(
+                          archive.read(matches[0])
+                      )
+
+                      if (
+                          data.get("version") != "V24.8"
+                          or data.get("status")
+                          != "PAPER_TRADING_ONLY"
+                      ):
+                          raise RuntimeError(
+                              "Invalid restored state"
+                          )
+
+                      if not isinstance(
+                          data.get("sequence"), int
+                      ):
+                          raise RuntimeError(
+                              "Missing state sequence"
+                          )
+
+                      state_path.write_text(
+                          json.dumps(data, indent=2),
+                          encoding="utf-8",
+                      )
+
+                      print(
+                          "Restored state from run",
+                          run.get("run_number"),
+                      )
+                      print(
+                          "Restored sequence:",
+                          data["sequence"],
+                      )
+
+                      restored = True
+                      break
+
+              if restored:
+                  break
+
+          if restored:
+              print("Previous state restored successfully")
+
+          elif bootstrap:
+              if runs:
+                  raise RuntimeError(
+                      "Previous successful runs exist. "
+                      "Refusing unsafe bootstrap."
+                  )
+
+              print("No previous runs: bootstrap permitted")
+
+              with open(
+                  os.environ["GITHUB_ENV"],
+                  "a",
+                  encoding="utf-8",
+              ) as env_file:
+                  env_file.write(
+                      "V248_RESTORE_REQUIRED=0\n"
+                  )
+
+          else:
+              raise RuntimeError(
+                  "No previous state found. "
+                  "Refusing to reset virtual capital."
+              )
           PY
-            echo 'V248_BOOTSTRAP=0' >> "$GITHUB_ENV"
-          else
-            if [[ "$BOOTSTRAP" != 'true' ]]; then
-              echo 'ERROR: no previous state artifact. Refusing reset.' >&2
-              exit 1
-            fi
-            echo 'V248_BOOTSTRAP=1' >> "$GITHUB_ENV"
-          fi
 
       - name: Run observational paper trading
-        run: python ai-research/v248/paper.py
+        run: |
+          python ai-research/v248/paper.py
 
-      - name: Persist state for next run
+      - name: Validate and persist state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          folder = Path("research-output/v248")
+          state_path = folder / "state.json"
+          report_path = folder / "report.json"
+
+          if not state_path.is_file():
+              raise RuntimeError("Missing state.json")
+
+          if not report_path.is_file():
+              raise RuntimeError("Missing report.json")
+
+          state = json.loads(
+              state_path.read_text(encoding="utf-8")
+          )
+
+          report = json.loads(
+              report_path.read_text(encoding="utf-8")
+          )
+
+          if state.get("version") != "V24.8":
+              raise RuntimeError("Invalid state version")
+
+          if (
+              state.get("status")
+              != "PAPER_TRADING_ONLY"
+          ):
+              raise RuntimeError("Invalid state status")
+
+          if report.get("orders_sent") != 0:
+              raise RuntimeError("Real orders detected")
+
+          if (
+              state.get("sequence")
+              != report.get("sequence")
+          ):
+              raise RuntimeError(
+                  "State/report sequence mismatch"
+              )
+
+          print(
+              "State validated. Sequence:",
+              state["sequence"],
+          )
+          print(
+              "Virtual cash:",
+              state["cash"],
+          )
+          PY
+
+      - name: Upload persistent paper state
         uses: actions/upload-artifact@v4
         with:
           name: v248-paper-state
@@ -84,7 +326,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Upload readable report
+      - name: Upload readable paper report
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: v248-paper-report
