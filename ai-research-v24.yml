@@ -1,0 +1,49 @@
+name: AI Research V24 - Real Data Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    name: V24 Market Data Diagnostics
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create report directory
+        run: |
+          mkdir -p reports/v24
+
+      - name: Download public market data
+        run: |
+          python ai-research/train_public_data.py \
+            --days 90 \
+            2>&1 | tee reports/v24/data_pipeline.log
+
+      - name: Locate OHLCV CSV files
+        id: locate
+        shell: bash
+        run: |
+          find . -type f -name "*.csv" \
+            -not -path "./.git/*" \
+            > reports/v24/csv_files.txt
+
+          echo "CSV files found:"
+          cat reports/v24/csv_files.txt
+
+      - name: Run V24 diagnostics
+        shell: bash
+        run: |
+          python - <<'
