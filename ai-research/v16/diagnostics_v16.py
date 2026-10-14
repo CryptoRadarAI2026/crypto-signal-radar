@@ -92,7 +92,7 @@ def replay(sample, candles, v11, atr_mult, tp_ratio, horizon, validation_end):
     ATR14 percent is feature 5; original V11 ATR was computed at signal close.
     """
     i = candles.index.get(sample.ts)
-    if i is None or i + horizon >= len(candles):
+    if i is None or i + horizon >= len(candles.ts):
         return None
     if int(candles.ts[i + horizon]) >= validation_end:
         return None
