@@ -2,11 +2,10 @@ name: V24.8 BTC Paper Trading
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "10 * * * *"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: v248-paper-trading
@@ -14,7 +13,10 @@ concurrency:
 
 jobs:
   paper-trading:
+    name: BTC Paper Trading Research
     runs-on: ubuntu-latest
+
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -28,16 +30,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy scikit-learn
+          python -m pip install numpy scikit-learn
 
-      - name: Run paper trading
+      - name: Run V24.8 paper simulator
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
           python ai-research/v248/paper.py
 
-      - name: Upload research reports
+      - name: Upload paper trading state and reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v248-paper-reports
           path: research-output/v248/
           if-no-files-found: warn
+          retention-days: 90
