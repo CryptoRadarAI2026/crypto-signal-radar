@@ -1,0 +1,60 @@
+name: V24.4 BTC Research Risk Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ai-research/v244/**"
+      - ".github/workflows/ai-research-v244-risk-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  risk-tests:
+    name: Research Risk Safety Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile \
+            ai-research/v244/risk_engine.py \
+            ai-research/v244/test_risk_engine.py
+
+      - name: Run risk engine tests
+        run: |
+          cd ai-research/v244
+          python -m unittest -v test_risk_engine
+
+      - name: Verify research-only configuration
+        run: |
+          python - <<'PY'
+          import json
+
+          path = "ai-research/v244/research_config.json"
+
+          with open(path, encoding="utf-8") as f:
+              config = json.load(f)
+
+          assert config["status"] == "RESEARCH_ONLY_NOT_APPROVED"
+
+          safety = config["safety"]
+
+          assert safety["research_only"] is True
+          assert safety["trading_enabled"] is False
+          assert safety["live_orders_enabled"] is False
+          assert safety["exchange_order_access"] is False
+          assert safety["model_approved"] is False
+
+          print("PASS: Research-only safety configuration")
+          PY
