@@ -1,0 +1,46 @@
+name: AI Research V14 - Economic Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v14-economic-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas scikit-learn requests
+
+      - name: Download historical Coinbase data
+        run: |
+          python ai-research/v11/download_coinbase_90d.py \
+            --output-dir data/raw
+
+      - name: Run V14 economic diagnostics
+        run: |
+          python ai-research/v14/research_v14.py \
+            --data-dir data/raw \
+            --output reports/v14/economic_diagnostics.json
+
+      - name: Upload V14 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v14-economic-diagnostics-report
+          path: reports/v14/economic_diagnostics.json
+          if-no-files-found: warn
+          retention-days: 30
